@@ -131,10 +131,33 @@ Or add it by hand to a client config (e.g. Claude Desktop `claude_desktop_config
 
 Then in any session: *"use conductor to list my sessions"* / *"what's left across my windows?"*
 
+## Control — reply to managed windows
+
+Conductor can also *steer* windows, not just watch them. Because a plain-terminal Claude
+TUI can't have input injected, control works on **managed** windows — ones you launch
+through Conductor into a [tmux](https://github.com/tmux/tmux) session:
+
+```bash
+conductor run soag            # launch a managed Claude window labelled "soag" (in tmux)
+conductor say soag yes         # send a quick reply
+conductor say soag "review and test it before deploying"
+conductor attach soag          # drop into the window to type longer commands
+conductor managed              # list managed windows
+conductor stop soag            # close it
+```
+
+In the **cockpit**, managed windows get a `MANAGED` badge and a reply bar — one-tap
+**Yes / No / Continue / Review / Re-iterate / Test+deploy** plus a free-text box. Clicks
+send keystrokes straight into the live window.
+
+Quick replies are short by design. For long, complex instructions, `conductor attach` and
+type in the window directly. Requires `tmux` (`brew install tmux`).
+
 ## Honest limits (v1)
 
-- **Read-only.** Conductor observes; it can't send commands into other windows yet.
-  (That's a planned later phase and is genuinely harder.)
+- **Control is managed-only.** Conductor can reply to windows you launched via
+  `conductor run` (tmux). Plain terminal windows you opened yourself stay read-only —
+  there's no reliable way to inject input into them.
 - **"What's left" is inferred** from the transcript, not a real todo list. Treat it as
   best-effort.
 - **"Live" = recently touched.** A window that's been open but idle for hours may not

@@ -12,6 +12,7 @@
 const http = require('http');
 const { exec } = require('child_process');
 const { collectSessions } = require('./lib');
+const manage = require('./manage');
 
 function parseArgs(argv) {
   const a = { port: parseInt(process.env.CONDUCTOR_PORT, 10) || 7591, open: true };
@@ -108,6 +109,20 @@ const PAGE = /* html */ `<!doctype html>
   .task { color:var(--mut); font-size:12.5px; line-height:1.45; margin:5px 0 13px; min-height:18px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
   .cfoot { display:flex; align-items:center; gap:7px; }
   .chip { font-family:var(--mono); font-size:10.5px; color:var(--mut); background:rgba(255,255,255,.05); border:1px solid var(--line); border-radius:6px; padding:2px 7px; }
+  .mbadge { font-size:9px; font-weight:750; letter-spacing:.7px; text-transform:uppercase; color:var(--accent); background:rgba(169,116,255,.12); border:1px solid rgba(169,116,255,.3); border-radius:999px; padding:2px 7px; }
+
+  .ctrl { margin-top:12px; padding-top:12px; border-top:1px dashed var(--line); }
+  .qbtns { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:7px; }
+  .qb { font:inherit; font-size:11px; font-weight:600; color:var(--txt); background:rgba(255,255,255,.05); border:1px solid var(--line2); border-radius:7px; padding:4px 9px; cursor:pointer; transition:.12s; }
+  .qb:hover { background:rgba(169,116,255,.18); border-color:var(--accent); }
+  .qrow { display:flex; gap:5px; }
+  .qin { flex:1; min-width:0; font:inherit; font-size:11.5px; color:var(--txt); background:rgba(0,0,0,.25); border:1px solid var(--line); border-radius:7px; padding:5px 9px; }
+  .qin:focus { outline:none; border-color:var(--accent); }
+  .qin::placeholder { color:var(--dim); }
+  .qsend { font:inherit; color:var(--txt); background:rgba(169,116,255,.18); border:1px solid var(--accent); border-radius:7px; padding:5px 11px; cursor:pointer; }
+  .qsend:hover { background:rgba(169,116,255,.3); }
+  .toast { position:fixed; bottom:22px; left:50%; transform:translateX(-50%); background:#15151f; border:1px solid var(--line2); color:var(--txt); font-size:12.5px; padding:9px 16px; border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,.5); opacity:0; transition:opacity .2s; pointer-events:none; z-index:80; }
+  .toast.show { opacity:1; }
 
   .card.active { --c:var(--active); } .card.open { --c:var(--open); }
   .card.recent { --c:var(--recent); } .card.idle { --c:var(--idle); }
@@ -154,6 +169,7 @@ const PAGE = /* html */ `<!doctype html>
 <main><div id="board"></div><div class="empty" id="empty" style="display:none"></div></main>
 
 <div class="scrim" id="scrim"><div class="modal" id="modal"></div></div>
+<div class="toast" id="toast"></div>
 
 <script>
 let WINDOW = '60';
@@ -183,16 +199,48 @@ async function load() {
   } catch(e) { /* keep last render */ }
 }
 
+const QUICK = [
+  ['Yes','yes'], ['No','no'], ['Continue','continue'],
+  ['Review','review what you just did and report back'],
+  ['Re-iterate','re-iterate and improve it'],
+  ['Test+deploy','review and test it before deploying'],
+];
+
+function ctrlHTML(s) {
+  const L = esc(s.mlabel);
+  const btns = QUICK.map(q => '<button class="qb" data-label="'+L+'" data-text="'+esc(q[1])+'">'+q[0]+'</button>').join('');
+  return '<div class="ctrl"><div class="qbtns">'+btns+'</div>'
+       + '<div class="qrow"><input class="qin" data-label="'+L+'" placeholder="reply to '+L+'…">'
+       + '<button class="qsend" data-label="'+L+'">↵</button></div></div>';
+}
+
 function cardHTML(s) {
-  return \`<div class="card \${s.status}" onclick="openCard('\${s.sessionId}')">
+  return \`<div class="card \${s.status}" data-id="\${s.sessionId}">
       <div class="ctop">
         <span class="pill \${s.status}"><i></i>\${STATUS_LABEL[s.status]||s.status}</span>
+        \${s.managed ? '<span class="mbadge">managed</span>' : ''}
         <span class="time">\${esc(s.lastActiveRel)}</span>
       </div>
       <div class="label">\${esc(s.label)}</div>
       <div class="task">\${esc(s.task || s.intent || '—')}</div>
       <div class="cfoot">\${s.gitBranch ? '<span class="chip">'+esc(s.gitBranch)+'</span>' : ''}</div>
+      \${s.managed ? ctrlHTML(s) : ''}
     </div>\`;
+}
+
+let toastT;
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastT); toastT = setTimeout(()=>t.classList.remove('show'), 2200);
+}
+async function reply(label, text) {
+  if (!text || !text.trim()) return;
+  try {
+    const r = await fetch('/api/say', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({label, text}) });
+    const j = await r.json();
+    toast(j.ok ? '→ sent “'+text+'” to '+label : 'send failed: '+(j.error||'?'));
+  } catch(e) { toast('send failed'); }
 }
 
 function render() {
@@ -242,6 +290,26 @@ document.getElementById('seg').addEventListener('click', e=>{
   document.querySelectorAll('#seg button').forEach(x=>x.classList.remove('on'));
   b.classList.add('on'); WINDOW=b.dataset.m; lastHash=''; load();
 });
+// delegated card + control handlers (survive innerHTML refresh)
+const boardEl = document.getElementById('board');
+boardEl.addEventListener('click', e=>{
+  const qb = e.target.closest('.qb,.qsend');
+  if (qb) {
+    e.stopPropagation();
+    const label = qb.dataset.label;
+    if (qb.classList.contains('qsend')) { const inp = qb.parentElement.querySelector('.qin'); reply(label, inp.value); inp.value=''; }
+    else reply(label, qb.dataset.text);
+    return;
+  }
+  if (e.target.closest('.ctrl')) return;       // clicks in the reply area shouldn't open the modal
+  const card = e.target.closest('.card');
+  if (card) openCard(card.dataset.id);
+});
+boardEl.addEventListener('keydown', e=>{
+  if (e.target.classList && e.target.classList.contains('qin') && e.key==='Enter') {
+    reply(e.target.dataset.label, e.target.value); e.target.value=''; e.stopPropagation();
+  }
+});
 document.getElementById('scrim').addEventListener('click', e=>{ if(e.target.id==='scrim') closeModal(); });
 document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeModal(); });
 
@@ -258,12 +326,29 @@ async function handle(req, res) {
     const minutes = parseInt(url.searchParams.get('minutes'), 10) || 60;
     try {
       const rows = await collectSessions({ minutes, all });
+      const mgd = manage.managedBySession();           // sessionId -> managed window
+      for (const r of rows) {
+        const w = mgd[r.sessionId];
+        if (w) { r.managed = true; r.mlabel = w.label; }
+      }
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
       res.end(JSON.stringify({ generatedAt: new Date().toISOString(), count: rows.length, sessions: rows }));
     } catch (e) {
       res.writeHead(500, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: e.message }));
     }
+    return;
+  }
+
+  if (url.pathname === '/api/say' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > 4096) req.destroy(); });
+    req.on('end', () => {
+      let p; try { p = JSON.parse(body || '{}'); } catch { p = {}; }
+      const res2 = p.key ? manage.key(p.label, p.key) : manage.say(p.label, p.text || '');
+      res.writeHead(res2.ok ? 200 : 400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(res2));
+    });
     return;
   }
   if (url.pathname === '/' || url.pathname === '/index.html') {

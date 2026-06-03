@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
-// conductor — one entry point. Dispatches to the table view, the web cockpit, or the
-// MCP server. Read-only. Zero dependencies.
+// conductor — one entry point. Read view: table / cockpit / mcp. Control: run / say /
+// attach / managed / stop (tmux-managed windows). Zero dependencies.
 
 const path = require('path');
 const { spawn } = require('child_process');
@@ -12,23 +12,29 @@ const cmd = (args[0] || '').toLowerCase();
 const rest = args.slice(1);
 const HERE = __dirname;
 
-const HELP = `🎼 conductor — situational awareness across your live Claude Code windows
+const HELP = `🎼 conductor — situational awareness + control across your Claude Code windows
 
-usage
+read
   conductor                list your live windows (table)
-  conductor ls [opts]        same; opts: --minutes N  --all  --json  --limit N
-  conductor up [opts]        launch the web cockpit, opens your browser
-                             opts: --port N (default 7591)  --no-open
-  conductor mcp              run the MCP server (stdio; for agent integration)
-  conductor help             show this
+  conductor ls [opts]        opts: --minutes N  --all  --json  --limit N
+  conductor up [opts]        launch the web cockpit  (--port N, --no-open)
+  conductor mcp              run the MCP server (stdio)
+
+control (tmux-managed windows)
+  conductor run <label> [-- claude args]   launch a managed window in tmux
+  conductor say <label> <text...>          send a reply into that window
+  conductor attach <label>                 attach your terminal to it (type long commands)
+  conductor managed                        list managed windows
+  conductor stop <label>                   close a managed window
 
 examples
-  conductor                  # quick glance, terminal table
-  conductor up               # open the visual cockpit
-  conductor ls --all         # every session, not just live ones
+  conductor run soag                       # start a managed window labelled "soag"
+  conductor say soag yes                    # answer its prompt
+  conductor say soag "review and test it before deploying"
+  conductor up                              # cockpit with reply buttons on managed cards
 
 labels    edit ~/.conductor/labels.json to name your projects (live-reloads)
-read-only it never touches or interrupts a running window`;
+read view is read-only; control only touches windows you launched via "conductor run"`;
 
 function run(script, a) {
   const child = spawn(process.execPath, [path.join(HERE, script), ...a], { stdio: 'inherit' });
@@ -36,10 +42,58 @@ function run(script, a) {
   child.on('error', (e) => { console.error('conductor: ' + e.message); process.exit(1); });
 }
 
+function manageCmd() {
+  const m = require('./manage');
+  if (cmd === 'run') {
+    const label = rest[0];
+    if (!label) { console.error('usage: conductor run <label> [-- claude args]'); process.exit(1); }
+    const sep = rest.indexOf('--');
+    const claudeArgs = sep >= 0 ? rest.slice(sep + 1) : [];
+    const res = m.run(label, claudeArgs, process.cwd());
+    if (!res.ok) { console.error('conductor: ' + res.error); process.exit(1); }
+    console.log(`🎼 managed window "${res.label}" started in tmux${res.sessionId ? '' : ' (sessionId not captured yet)'}.`);
+    console.log(`   reply:  conductor say ${res.label} "yes"`);
+    console.log(`   attach: ${res.attach}`);
+    return;
+  }
+  if (cmd === 'say') {
+    const label = rest[0];
+    const text = rest.slice(1).join(' ');
+    if (!label || !text) { console.error('usage: conductor say <label> <text...>'); process.exit(1); }
+    const res = m.say(label, text);
+    if (!res.ok) { console.error('conductor: ' + res.error); process.exit(1); }
+    console.log(`→ sent to ${res.label}: ${res.sent}`);
+    return;
+  }
+  if (cmd === 'attach') {
+    const label = m.sanitize(rest[0] || '');
+    if (!rest[0]) { console.error('usage: conductor attach <label>'); process.exit(1); }
+    const child = spawn('tmux', ['attach', '-t', m.SESSION, ';', 'select-window', '-t', label], { stdio: 'inherit' });
+    child.on('exit', (c) => process.exit(c == null ? 0 : c));
+    child.on('error', (e) => { console.error('conductor: ' + e.message); process.exit(1); });
+    return;
+  }
+  if (cmd === 'managed') {
+    const list = m.listManaged();
+    if (!list.length) { console.log('no managed windows. start one: conductor run <label>'); return; }
+    console.log('🎼 managed windows:');
+    for (const w of list) console.log(`  ● ${w.label}  (${w.target})  cwd:${w.cwd}${w.sessionId ? '' : '  [no sessionId]'}`);
+    return;
+  }
+  if (cmd === 'stop') {
+    if (!rest[0]) { console.error('usage: conductor stop <label>'); process.exit(1); }
+    const res = m.stop(rest[0]);
+    console.log(res.ok ? `stopped ${res.label}` : `conductor: could not stop ${res.label}`);
+    return;
+  }
+}
+
 if (['help', '-h', '--help'].includes(cmd)) {
   console.log(HELP);
+} else if (['run', 'say', 'attach', 'managed', 'stop'].includes(cmd)) {
+  manageCmd();
 } else if (cmd === '' || cmd.startsWith('-')) {
-  run('scan.js', args);                 // bare `conductor` or `conductor --minutes 60`
+  run('scan.js', args);
 } else if (['ls', 'list', 'table'].includes(cmd)) {
   run('scan.js', rest);
 } else if (['up', 'cockpit', 'serve', 'web'].includes(cmd)) {
