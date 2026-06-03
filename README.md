@@ -97,6 +97,29 @@ cp skill/SKILL.md ~/.claude/skills/conductor/SKILL.md
 Then in any Claude Code session: **"sort out my windows"** / **`/conductor`**. Claude
 runs the scanner and renders a *doing-now / done / what's-left* summary per window.
 
+### As an MCP server (use it inside any agent)
+
+Conductor speaks the Model Context Protocol over stdio, so any MCP-aware agent can call
+it natively. Three tools: `list_sessions`, `summarize_session`, `whats_left`.
+
+Add it to Claude Code (user scope = available everywhere):
+
+```bash
+claude mcp add conductor --scope user -- node ~/conductor/mcp.js
+```
+
+Or add it by hand to a client config (e.g. Claude Desktop `claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "conductor": { "command": "node", "args": ["/Users/you/conductor/mcp.js"] }
+  }
+}
+```
+
+Then in any session: *"use conductor to list my sessions"* / *"what's left across my windows?"*
+
 ## Honest limits (v1)
 
 - **Read-only.** Conductor observes; it can't send commands into other windows yet.

@@ -4,12 +4,14 @@
   "description": "Read-only situational awareness across your live Claude Code sessions. Open one window, see what every other window is doing.",
   "bin": {
     "conductor": "scan.js",
-    "conductor-cockpit": "server.js"
+    "conductor-cockpit": "server.js",
+    "conductor-mcp": "mcp.js"
   },
   "scripts": {
     "start": "node scan.js",
     "serve": "node server.js",
-    "test": "node test.js"
+    "mcp": "node mcp.js",
+    "test": "node test.js && node mcp.test.js"
   },
   "keywords": ["claude-code", "cli", "agents", "orchestration", "dashboard"],
   "license": "MIT",
