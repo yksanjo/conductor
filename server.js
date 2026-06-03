@@ -61,7 +61,13 @@ const PAGE = /* html */ `<!doctype html>
   .seg button.on { background:var(--panel2); color:var(--txt); }
   .pulse { width:7px; height:7px; border-radius:50%; background:var(--active); box-shadow:0 0 0 0 var(--active); animation:p 2s infinite; }
   @keyframes p { 0%{box-shadow:0 0 0 0 rgba(54,224,127,.5);} 70%{box-shadow:0 0 0 7px rgba(54,224,127,0);} 100%{box-shadow:0 0 0 0 rgba(54,224,127,0);} }
-  main { padding:24px 26px 60px; }
+  main { padding:20px 26px 60px; }
+  .section-head { display:flex; align-items:center; gap:13px; margin:30px 0 14px; }
+  .section-head:first-child { margin-top:6px; }
+  .section-head .sdot { width:8px; height:8px; border-radius:50%; flex:none; }
+  .section-head .stitle { font-size:11px; font-weight:750; letter-spacing:1.4px; text-transform:uppercase; color:var(--mut); white-space:nowrap; }
+  .section-head .rule { flex:1; height:1px; background:linear-gradient(90deg,var(--line),transparent); }
+  .section-head .scount { font-size:11px; color:var(--dim); flex:none; }
   .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:16px; }
   .card {
     background:linear-gradient(180deg,var(--panel),var(--panel2)); border:1px solid var(--line);
@@ -123,7 +129,7 @@ const PAGE = /* html */ `<!doctype html>
     <button data-m="all">all</button>
   </div>
 </header>
-<main><div class="grid" id="grid"></div><div class="empty" id="empty" style="display:none"></div></main>
+<main><div id="board"></div><div class="empty" id="empty" style="display:none"></div></main>
 
 <div class="scrim" id="scrim"><div class="modal" id="modal"></div></div>
 
@@ -143,18 +149,15 @@ async function load() {
   } catch(e) { /* keep last render */ }
 }
 
-function render() {
-  const grid = document.getElementById('grid');
-  const empty = document.getElementById('empty');
-  document.getElementById('count').textContent = DATA.length ? DATA.length+' window'+(DATA.length>1?'s':'') : '';
-  if (!DATA.length) {
-    grid.innerHTML=''; empty.style.display='block';
-    empty.textContent = 'No sessions in this window. Try a wider range.';
-    return;
-  }
-  empty.style.display='none';
-  grid.innerHTML = DATA.map(s => \`
-    <div class="card \${s.status}" onclick="openCard('\${s.sessionId}')">
+const SECTIONS = [
+  { k:'active', t:'Working now',     c:'#36e07f' },
+  { k:'open',   t:'Open',            c:'#4bd0c0' },
+  { k:'recent', t:'Recently active', c:'#f5b942' },
+  { k:'idle',   t:'Idle',            c:'#6a6a85' },
+];
+
+function cardHTML(s) {
+  return \`<div class="card \${s.status}" onclick="openCard('\${s.sessionId}')">
       <div class="bar"></div>
       <div class="row1"><span class="dot"></span><span class="label">\${esc(s.label)}</span></div>
       <div class="task">\${esc(s.task || s.intent || '—')}</div>
@@ -162,7 +165,29 @@ function render() {
         \${s.gitBranch ? '<span class="chip">'+esc(s.gitBranch)+'</span>' : ''}
         <span class="time">\${esc(s.lastActiveRel)}</span>
       </div>
-    </div>\`).join('');
+    </div>\`;
+}
+
+function render() {
+  const board = document.getElementById('board');
+  const empty = document.getElementById('empty');
+  document.getElementById('count').textContent = DATA.length ? DATA.length+' window'+(DATA.length>1?'s':'') : '';
+  if (!DATA.length) {
+    board.innerHTML=''; empty.style.display='block';
+    empty.textContent = 'No sessions in this window. Try a wider range.';
+    return;
+  }
+  empty.style.display='none';
+  let html = '';
+  for (const sec of SECTIONS) {
+    const items = DATA.filter(s => s.status === sec.k);
+    if (!items.length) continue;
+    html += \`<div class="section-head"><span class="sdot" style="background:\${sec.c}"></span>\`
+         +  \`<span class="stitle">\${sec.t}</span><span class="rule"></span>\`
+         +  \`<span class="scount">\${items.length}</span></div>\`;
+    html += '<div class="grid">' + items.map(cardHTML).join('') + '</div>';
+  }
+  board.innerHTML = html;
   if (openId) renderModal(); // keep detail fresh while open
 }
 
