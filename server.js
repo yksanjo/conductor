@@ -3,7 +3,7 @@
 
 // Conductor daemon — serves a live, glanceable web cockpit of your Claude Code sessions.
 // Read-only. Zero dependencies (node:http only). The page polls /api/sessions and
-// re-renders cards; click a card for full detail.
+// re-renders only when the data changes; click a card for full detail.
 //
 //   conductor-cockpit                 start on :7591, open browser, 60-min window
 //   conductor-cockpit --port 8080
@@ -28,99 +28,121 @@ const PAGE = /* html */ `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>🎼 Conductor</title>
+<title>Conductor</title>
 <style>
   :root {
-    --bg:#0b0b11; --panel:#15151f; --panel2:#1c1c2a; --line:#2a2a3d;
-    --txt:#ececf4; --mut:#8a8aa3; --dim:#5d5d75;
-    --active:#36e07f; --open:#4bd0c0; --recent:#f5b942; --idle:#6a6a85;
-    --accent:#b06cff; --accent2:#ff5cc8;
+    --bg:#08080b; --bg2:#0b0b10;
+    --line:rgba(255,255,255,.06); --line2:rgba(255,255,255,.12);
+    --txt:#f3f3f8; --mut:#9696ab; --dim:#5c5c72;
+    --active:#3ee07f; --open:#46d8c6; --recent:#f5b13f; --idle:#6a6a85;
+    --accent:#a974ff; --accent2:#ff5cc8;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
+    --sans:ui-sans-serif,-apple-system,"SF Pro Text",Inter,system-ui,sans-serif;
   }
   * { box-sizing:border-box; }
+  html { color-scheme:dark; }
   body {
     margin:0; background:var(--bg); color:var(--txt);
-    font:14px/1.45 ui-sans-serif,-apple-system,"SF Pro Text",Inter,system-ui,sans-serif;
-    -webkit-font-smoothing:antialiased;
-    background-image:radial-gradient(1200px 600px at 80% -10%, rgba(176,108,255,.10), transparent),
-                     radial-gradient(900px 500px at 0% 110%, rgba(255,92,200,.07), transparent);
+    font:13.5px/1.5 var(--sans); -webkit-font-smoothing:antialiased; letter-spacing:.1px;
     min-height:100vh;
+    background-image:
+      radial-gradient(900px 480px at 88% -8%, rgba(169,116,255,.10), transparent 70%),
+      radial-gradient(760px 420px at -4% 108%, rgba(255,92,200,.06), transparent 70%);
   }
+  ::selection { background:rgba(169,116,255,.3); }
+  /* scrollbar */
+  ::-webkit-scrollbar { width:10px; height:10px; }
+  ::-webkit-scrollbar-thumb { background:#23232f; border-radius:6px; border:2px solid var(--bg); }
+
   header {
-    display:flex; align-items:center; gap:16px; padding:18px 26px; position:sticky; top:0;
-    backdrop-filter:blur(10px); background:rgba(11,11,17,.7); border-bottom:1px solid var(--line); z-index:10;
+    display:flex; align-items:center; gap:14px; padding:13px 24px; position:sticky; top:0; z-index:20;
+    background:rgba(8,8,11,.72); backdrop-filter:blur(14px) saturate(1.2);
+    border-bottom:1px solid var(--line);
   }
-  h1 { font-size:17px; margin:0; letter-spacing:.3px; font-weight:650; }
-  h1 .g { background:linear-gradient(90deg,var(--accent),var(--accent2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
-  .count { color:var(--mut); font-size:13px; }
+  .brand { display:flex; align-items:center; gap:9px; font-size:14.5px; font-weight:640; letter-spacing:.2px; }
+  .brand .mk { background:linear-gradient(92deg,var(--accent),var(--accent2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .live { width:7px; height:7px; border-radius:50%; background:var(--active); box-shadow:0 0 0 0 var(--active); animation:pulse 2.4s infinite; }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(62,224,127,.45);} 70%{box-shadow:0 0 0 8px rgba(62,224,127,0);} 100%{box-shadow:0 0 0 0 rgba(62,224,127,0);} }
+  .count { color:var(--mut); font-size:12.5px; font-variant-numeric:tabular-nums; }
   .spacer { flex:1; }
-  .seg { display:flex; gap:2px; background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:3px; }
-  .seg button {
-    border:0; background:transparent; color:var(--mut); font:inherit; font-size:12px; font-weight:600;
-    padding:5px 11px; border-radius:6px; cursor:pointer;
-  }
-  .seg button.on { background:var(--panel2); color:var(--txt); }
-  .pulse { width:7px; height:7px; border-radius:50%; background:var(--active); box-shadow:0 0 0 0 var(--active); animation:p 2s infinite; }
-  @keyframes p { 0%{box-shadow:0 0 0 0 rgba(54,224,127,.5);} 70%{box-shadow:0 0 0 7px rgba(54,224,127,0);} 100%{box-shadow:0 0 0 0 rgba(54,224,127,0);} }
-  main { padding:20px 26px 60px; }
-  .section-head { display:flex; align-items:center; gap:13px; margin:30px 0 14px; }
-  .section-head:first-child { margin-top:6px; }
-  .section-head .sdot { width:8px; height:8px; border-radius:50%; flex:none; }
-  .section-head .stitle { font-size:11px; font-weight:750; letter-spacing:1.4px; text-transform:uppercase; color:var(--mut); white-space:nowrap; }
-  .section-head .rule { flex:1; height:1px; background:linear-gradient(90deg,var(--line),transparent); }
-  .section-head .scount { font-size:11px; color:var(--dim); flex:none; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:16px; }
+  .legend { display:flex; gap:14px; font-size:11px; color:var(--mut); }
+  .legend i { width:7px; height:7px; border-radius:50%; display:inline-block; margin-right:5px; vertical-align:middle; }
+  .seg { display:flex; gap:1px; background:rgba(255,255,255,.04); border:1px solid var(--line); border-radius:9px; padding:2px; }
+  .seg button { border:0; background:transparent; color:var(--mut); font:inherit; font-size:11.5px; font-weight:600; padding:5px 11px; border-radius:7px; cursor:pointer; transition:.12s; }
+  .seg button:hover { color:var(--txt); }
+  .seg button.on { background:rgba(255,255,255,.09); color:var(--txt); box-shadow:0 1px 2px rgba(0,0,0,.3); }
+
+  main { padding:14px 24px 64px; max-width:1500px; margin:0 auto; }
+  .section-head { display:flex; align-items:center; gap:12px; margin:28px 2px 14px; }
+  .section-head:first-child { margin-top:10px; }
+  .section-head .sdot { width:7px; height:7px; border-radius:50%; flex:none; box-shadow:0 0 8px currentColor; }
+  .section-head .stitle { font-size:10.5px; font-weight:750; letter-spacing:1.6px; text-transform:uppercase; color:var(--mut); white-space:nowrap; }
+  .section-head .rule { flex:1; height:1px; background:linear-gradient(90deg,var(--line2),transparent); }
+  .section-head .scount { font-size:11px; color:var(--dim); font-variant-numeric:tabular-nums; flex:none; }
+
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(248px,1fr)); gap:14px; }
   .card {
-    background:linear-gradient(180deg,var(--panel),var(--panel2)); border:1px solid var(--line);
-    border-radius:16px; padding:17px 17px 15px; cursor:pointer; position:relative; overflow:hidden;
-    transition:transform .12s ease, border-color .12s ease, box-shadow .12s ease;
+    --c:var(--mut);
+    background:linear-gradient(165deg,rgba(255,255,255,.035),rgba(255,255,255,.012));
+    border:1px solid var(--line); border-radius:15px; padding:15px 16px 14px; cursor:pointer;
+    position:relative; isolation:isolate; transition:transform .14s ease, border-color .14s ease, box-shadow .14s ease;
   }
-  .card:hover { transform:translateY(-3px); border-color:#3a3a55; box-shadow:0 12px 30px rgba(0,0,0,.45); }
-  .card .bar { position:absolute; left:0; top:0; bottom:0; width:3px; }
-  .card.active .bar { background:var(--active); }
-  .card.open   .bar { background:var(--open); }
-  .card.recent .bar { background:var(--recent); }
-  .card.idle  .bar { background:var(--idle); opacity:.6; }
-  .card.idle { opacity:.72; }
-  .row1 { display:flex; align-items:center; gap:8px; margin-bottom:3px; }
-  .dot { width:9px; height:9px; border-radius:50%; flex:none; }
-  .active .dot { background:var(--active); box-shadow:0 0 8px var(--active); }
-  .open   .dot { background:var(--open); box-shadow:0 0 7px var(--open); }
-  .recent .dot { background:var(--recent); }
-  .idle  .dot { background:var(--idle); }
-  .legend { display:flex; gap:13px; font-size:11px; color:var(--mut); align-items:center; }
-  .legend i { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:5px; vertical-align:middle; }
-  .label { font-size:17px; font-weight:680; letter-spacing:.2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .task { color:var(--mut); font-size:13px; min-height:18px; margin:2px 0 12px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
-  .meta { display:flex; align-items:center; gap:8px; font-size:11px; color:var(--dim); }
-  .chip { background:#23233444; border:1px solid var(--line); border-radius:6px; padding:1px 7px; color:var(--mut); }
-  .time { margin-left:auto; }
-  .empty { color:var(--mut); text-align:center; padding:80px 0; }
+  .card::before {
+    content:''; position:absolute; inset:0; border-radius:inherit; padding:1px; pointer-events:none; opacity:0; transition:opacity .14s;
+    background:linear-gradient(165deg,var(--c),transparent 55%);
+    -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+    -webkit-mask-composite:xor; mask-composite:exclude;
+  }
+  .card:hover { transform:translateY(-2px); box-shadow:0 14px 34px rgba(0,0,0,.5), 0 0 0 1px var(--line2); }
+  .card:hover::before { opacity:.55; }
+  .card.idle { opacity:.66; }
+  .card.idle:hover { opacity:1; }
+
+  .ctop { display:flex; align-items:center; gap:8px; margin-bottom:9px; }
+  .pill { display:inline-flex; align-items:center; gap:6px; font-size:10.5px; font-weight:650; letter-spacing:.4px; text-transform:uppercase; color:var(--c); background:color-mix(in srgb,var(--c) 13%,transparent); border:1px solid color-mix(in srgb,var(--c) 26%,transparent); padding:3px 8px; border-radius:999px; }
+  .pill i { width:6px; height:6px; border-radius:50%; background:var(--c); }
+  .pill.active i { box-shadow:0 0 7px var(--c); }
+  .time { margin-left:auto; font-size:11px; color:var(--dim); font-variant-numeric:tabular-nums; white-space:nowrap; }
+
+  .label { font-size:15.5px; font-weight:660; letter-spacing:.1px; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .task { color:var(--mut); font-size:12.5px; line-height:1.45; margin:5px 0 13px; min-height:18px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .cfoot { display:flex; align-items:center; gap:7px; }
+  .chip { font-family:var(--mono); font-size:10.5px; color:var(--mut); background:rgba(255,255,255,.05); border:1px solid var(--line); border-radius:6px; padding:2px 7px; }
+
+  .card.active { --c:var(--active); } .card.open { --c:var(--open); }
+  .card.recent { --c:var(--recent); } .card.idle { --c:var(--idle); }
+
+  .empty { color:var(--mut); text-align:center; padding:90px 0; font-size:13px; }
+
   /* modal */
-  .scrim { position:fixed; inset:0; background:rgba(5,5,9,.66); backdrop-filter:blur(3px); display:none; align-items:center; justify-content:center; z-index:50; }
-  .scrim.show { display:flex; }
-  .modal { width:min(640px,92vw); max-height:84vh; overflow:auto; background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:24px; }
-  .modal h2 { margin:0 0 2px; font-size:21px; }
-  .modal .sub { color:var(--mut); font-size:13px; margin-bottom:18px; }
-  .kv { margin:14px 0; }
-  .kv .k { color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.6px; margin-bottom:4px; }
-  .kv .v { color:var(--txt); font-size:14px; word-break:break-word; }
-  .timeline { border-left:2px solid var(--line); margin-left:4px; padding-left:16px; }
-  .ev { margin:9px 0; font-size:13px; color:var(--mut); }
-  .ev b { color:var(--txt); font-weight:600; }
-  .close { float:right; cursor:pointer; color:var(--mut); font-size:20px; line-height:1; border:0; background:0; }
-  .foot { color:var(--dim); font-size:11px; margin-top:22px; }
+  .scrim { position:fixed; inset:0; background:rgba(4,4,7,.72); backdrop-filter:blur(5px); display:none; align-items:center; justify-content:center; z-index:60; padding:24px; }
+  .scrim.show { display:flex; animation:fade .14s ease; }
+  @keyframes fade { from{opacity:0;} to{opacity:1;} }
+  .modal { width:min(660px,100%); max-height:86vh; overflow:auto; background:linear-gradient(180deg,#13131b,#0e0e14); border:1px solid var(--line2); border-radius:20px; padding:26px 28px; box-shadow:0 30px 80px rgba(0,0,0,.6); }
+  .modal h2 { margin:0 0 3px; font-size:22px; font-weight:680; letter-spacing:.2px; }
+  .modal .sub { color:var(--dim); font-size:12px; font-family:var(--mono); margin-bottom:20px; word-break:break-all; }
+  .kv { margin:15px 0; }
+  .kv .k { color:var(--dim); font-size:10px; text-transform:uppercase; letter-spacing:1px; margin-bottom:5px; font-weight:700; }
+  .kv .v { color:var(--txt); font-size:13.5px; word-break:break-word; line-height:1.5; }
+  .timeline { display:flex; flex-direction:column; gap:9px; margin-top:4px; }
+  .ev { display:flex; gap:9px; font-size:12.5px; color:var(--mut); line-height:1.4; }
+  .ev .who { font-family:var(--mono); font-size:10px; color:var(--dim); text-transform:uppercase; letter-spacing:.5px; flex:none; width:46px; padding-top:1px; }
+  .ev .what { word-break:break-word; }
+  .close { float:right; cursor:pointer; color:var(--mut); font-size:22px; line-height:1; border:0; background:0; transition:color .12s; }
+  .close:hover { color:var(--txt); }
+  .foot { color:var(--dim); font-size:11px; font-family:var(--mono); margin-top:24px; padding-top:16px; border-top:1px solid var(--line); }
 </style>
 </head>
 <body>
 <header>
-  <span class="pulse"></span>
-  <h1>🎼 <span class="g">Conductor</span></h1>
+  <span class="live"></span>
+  <span class="brand">🎼 <span class="mk">Conductor</span></span>
   <span class="count" id="count"></span>
   <span class="spacer"></span>
   <div class="legend">
-    <span><i style="background:#36e07f"></i>working</span>
-    <span><i style="background:#4bd0c0"></i>open</span>
-    <span><i style="background:#f5b942"></i>recent</span>
+    <span><i style="background:#3ee07f"></i>working</span>
+    <span><i style="background:#46d8c6"></i>open</span>
+    <span><i style="background:#f5b13f"></i>recent</span>
   </div>
   <div class="seg" id="seg">
     <button data-m="10">10m</button>
@@ -137,34 +159,39 @@ const PAGE = /* html */ `<!doctype html>
 let WINDOW = '60';
 let DATA = [];
 let openId = null;
+let lastHash = '';
 
 const esc = (s)=> (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const STATUS_LABEL = { active:'working', open:'open', recent:'recent', idle:'idle' };
+
+const SECTIONS = [
+  { k:'active', t:'Working now',     c:'#3ee07f' },
+  { k:'open',   t:'Open',            c:'#46d8c6' },
+  { k:'recent', t:'Recently active', c:'#f5b13f' },
+  { k:'idle',   t:'Idle',            c:'#6a6a85' },
+];
 
 async function load() {
   const q = WINDOW==='all' ? 'all=1' : 'minutes='+WINDOW;
   try {
     const r = await fetch('/api/sessions?'+q);
     const j = await r.json();
-    DATA = j.sessions; render();
+    const hash = WINDOW + '|' + JSON.stringify(j.sessions.map(s=>[s.sessionId,s.status,s.lastActiveRel,s.lastAction,s.label]));
+    DATA = j.sessions;
+    if (hash !== lastHash) { lastHash = hash; render(); }   // flicker-free: only repaint on change
+    else if (openId) renderModal();
   } catch(e) { /* keep last render */ }
 }
 
-const SECTIONS = [
-  { k:'active', t:'Working now',     c:'#36e07f' },
-  { k:'open',   t:'Open',            c:'#4bd0c0' },
-  { k:'recent', t:'Recently active', c:'#f5b942' },
-  { k:'idle',   t:'Idle',            c:'#6a6a85' },
-];
-
 function cardHTML(s) {
   return \`<div class="card \${s.status}" onclick="openCard('\${s.sessionId}')">
-      <div class="bar"></div>
-      <div class="row1"><span class="dot"></span><span class="label">\${esc(s.label)}</span></div>
-      <div class="task">\${esc(s.task || s.intent || '—')}</div>
-      <div class="meta">
-        \${s.gitBranch ? '<span class="chip">'+esc(s.gitBranch)+'</span>' : ''}
+      <div class="ctop">
+        <span class="pill \${s.status}"><i></i>\${STATUS_LABEL[s.status]||s.status}</span>
         <span class="time">\${esc(s.lastActiveRel)}</span>
       </div>
+      <div class="label">\${esc(s.label)}</div>
+      <div class="task">\${esc(s.task || s.intent || '—')}</div>
+      <div class="cfoot">\${s.gitBranch ? '<span class="chip">'+esc(s.gitBranch)+'</span>' : ''}</div>
     </div>\`;
 }
 
@@ -174,7 +201,7 @@ function render() {
   document.getElementById('count').textContent = DATA.length ? DATA.length+' window'+(DATA.length>1?'s':'') : '';
   if (!DATA.length) {
     board.innerHTML=''; empty.style.display='block';
-    empty.textContent = 'No sessions in this window. Try a wider range.';
+    empty.textContent = 'No sessions in this window. Try a wider range →';
     return;
   }
   empty.style.display='none';
@@ -182,13 +209,13 @@ function render() {
   for (const sec of SECTIONS) {
     const items = DATA.filter(s => s.status === sec.k);
     if (!items.length) continue;
-    html += \`<div class="section-head"><span class="sdot" style="background:\${sec.c}"></span>\`
+    html += \`<div class="section-head"><span class="sdot" style="color:\${sec.c};background:\${sec.c}"></span>\`
          +  \`<span class="stitle">\${sec.t}</span><span class="rule"></span>\`
          +  \`<span class="scount">\${items.length}</span></div>\`;
     html += '<div class="grid">' + items.map(cardHTML).join('') + '</div>';
   }
   board.innerHTML = html;
-  if (openId) renderModal(); // keep detail fresh while open
+  if (openId) renderModal();
 }
 
 function openCard(id){ openId=id; renderModal(); document.getElementById('scrim').classList.add('show'); }
@@ -197,24 +224,23 @@ function closeModal(){ openId=null; document.getElementById('scrim').classList.r
 function renderModal(){
   const s = DATA.find(x=>x.sessionId===openId);
   if(!s){ closeModal(); return; }
-  const evs = (s.recent||[]).slice().reverse().map(e=>{
-    const who = e.role==='assistant' ? 'Claude' : 'you';
-    return '<div class="ev"><b>'+who+'</b> · '+esc(e.summary)+'</div>';
-  }).join('') || '<div class="ev">no recent events</div>';
+  const evs = (s.recent||[]).slice().reverse().map(e=>
+    '<div class="ev"><span class="who">'+(e.role==='assistant'?'Claude':'you')+'</span><span class="what">'+esc(e.summary)+'</span></div>'
+  ).join('') || '<div class="ev"><span class="what">no recent events</span></div>';
   document.getElementById('modal').innerHTML = \`
     <button class="close" onclick="closeModal()">×</button>
     <h2>\${esc(s.label)}</h2>
-    <div class="sub">\${esc(s.cwd||'')} \${s.gitBranch?' · '+esc(s.gitBranch):''} · \${esc(s.lastActiveRel)} · \${esc(s.status)}</div>
+    <div class="sub">\${esc(s.cwd||'')}\${s.gitBranch?'  ·  '+esc(s.gitBranch):''}  ·  \${esc(s.lastActiveRel)}  ·  \${esc(s.status)}</div>
     <div class="kv"><div class="k">Goal</div><div class="v">\${esc(s.intent||s.task||'—')}</div></div>
     <div class="kv"><div class="k">Doing now</div><div class="v">\${esc(s.lastAction||'—')}</div></div>
-    <div class="kv"><div class="k">Recent</div><div class="timeline">\${evs}</div></div>
-    <div class="foot">session \${esc(s.shortId)} · read-only · this view never touches the window</div>\`;
+    <div class="kv"><div class="k">Recent activity</div><div class="timeline">\${evs}</div></div>
+    <div class="foot">session \${esc(s.shortId)} · read-only — this view never touches the window</div>\`;
 }
 
 document.getElementById('seg').addEventListener('click', e=>{
   const b=e.target.closest('button'); if(!b) return;
   document.querySelectorAll('#seg button').forEach(x=>x.classList.remove('on'));
-  b.classList.add('on'); WINDOW=b.dataset.m; load();
+  b.classList.add('on'); WINDOW=b.dataset.m; lastHash=''; load();
 });
 document.getElementById('scrim').addEventListener('click', e=>{ if(e.target.id==='scrim') closeModal(); });
 document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeModal(); });
