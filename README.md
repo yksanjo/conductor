@@ -55,6 +55,36 @@ Or install the bin:
 npm link        # then: conductor --minutes 30
 ```
 
+### Web cockpit (the visual)
+
+A live, glanceable dashboard. Big friendly label per window, color-coded status
+(🟢 working now · 🟡 idle), click a card for full detail (goal, last action, recent
+timeline). Auto-refreshes every 4s. Read-only.
+
+```bash
+node server.js              # starts on :7591 and opens your browser
+node server.js --port 8080  # custom port
+node server.js --no-open    # don't auto-open
+# or: npm run serve   /   conductor-cockpit
+```
+
+### Custom labels (the "key")
+
+The big label on each card comes from the working directory, auto-prettified. To give a
+project a human name, edit `~/.conductor/labels.json` — a flat map of
+`<dir-basename>` → `<friendly name>`:
+
+```json
+{
+  "agentsoag": "SOAG · Website",
+  "inmusic-pitch": "inMusic · Pitch",
+  "survivors": "DegenScreener"
+}
+```
+
+Changes are picked up live (no restart). Unmapped projects fall back to a prettified
+directory name.
+
 ### As a Claude Code skill (recommended)
 
 Install the skill so any window can summarize the others in natural language:

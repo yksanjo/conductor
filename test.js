@@ -91,13 +91,15 @@ ok('excludes subagent sidechain thread', !ids.some((id) => id === 'subagent-xyz'
 
 const a = json.sessions.find((s) => s.sessionId === sessA);
 ok('A: project name from cwd basename', a.project === 'alpha');
+ok('A: friendly label prettified from dir', a.label === 'Alpha');
 ok('A: git branch parsed', a.gitBranch === 'feat');
-ok('A: aiTitle captured', a.title === 'Build the login form');
+ok('A: aiTitle captured as task', a.task === 'Build the login form');
 ok('A: lastPrompt captured as intent', a.intent === 'add a login form');
 ok('A: last action is the Edit tool (not the tool_result after it)', /Edit/.test(a.lastAction));
+ok('A: status is active/recent (activity <60m ago)', a.status === 'active' || a.status === 'recent');
 
 const b = json.sessions.find((s) => s.sessionId === sessB);
-ok('B: title captured', b.title === 'Research pricing');
+ok('B: task captured', b.task === 'Research pricing');
 ok('B: last action is WebSearch', /WebSearch/.test(b.lastAction));
 
 ok('newest activity sorted first (B more recent than A)', json.sessions[0].sessionId === sessB);

@@ -3,10 +3,12 @@
   "version": "0.1.0",
   "description": "Read-only situational awareness across your live Claude Code sessions. Open one window, see what every other window is doing.",
   "bin": {
-    "conductor": "scan.js"
+    "conductor": "scan.js",
+    "conductor-cockpit": "server.js"
   },
   "scripts": {
     "start": "node scan.js",
+    "serve": "node server.js",
     "test": "node test.js"
   },
   "keywords": ["claude-code", "cli", "agents", "orchestration", "dashboard"],
