@@ -2,6 +2,8 @@
 
 **Situational awareness across your live Claude Code sessions.**
 
+![The Conductor cockpit — your live Claude Code windows grouped by status](docs/cockpit.png)
+
 You've got 10 terminals running Claude Code. You lose track of what each one is doing.
 Open a fresh window and ask Conductor to sort them out:
 
