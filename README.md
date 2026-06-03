@@ -38,21 +38,31 @@ Every Claude Code window logs a live `.jsonl` transcript under
    pulling each session's `ai-title`, latest prompt, recent tool calls, and last action.
 4. Reports one row per window.
 
-## Usage
-
-### Standalone CLI
+## Install
 
 ```bash
-node scan.js                 # pretty table, sessions active in last 10 min
-node scan.js --minutes 60    # widen the window
-node scan.js --all           # every session, ignore the time filter
-node scan.js --json          # structured JSON
+git clone <repo> ~/conductor && cd ~/conductor && npm link
 ```
 
-Or install the bin:
+`npm link` puts a global `conductor` command on your PATH. No build, no dependencies.
+
+## Usage
+
+One command, three modes:
 
 ```bash
-npm link        # then: conductor --minutes 30
+conductor              # glance: table of your live windows
+conductor up           # launch the visual web cockpit (opens your browser)
+conductor mcp          # run the MCP server (for agent integration)
+conductor help         # all options
+```
+
+### Table options
+
+```bash
+conductor --minutes 60   # widen the time window
+conductor ls --all       # every session, ignore the filter
+conductor ls --json      # structured JSON
 ```
 
 ### Web cockpit (the visual)
@@ -62,10 +72,9 @@ A live, glanceable dashboard. Big friendly label per window, color-coded status
 timeline). Auto-refreshes every 4s. Read-only.
 
 ```bash
-node server.js              # starts on :7591 and opens your browser
-node server.js --port 8080  # custom port
-node server.js --no-open    # don't auto-open
-# or: npm run serve   /   conductor-cockpit
+conductor up                # starts on :7591 and opens your browser
+conductor up --port 8080    # custom port
+conductor up --no-open      # don't auto-open
 ```
 
 ### Custom labels (the "key")

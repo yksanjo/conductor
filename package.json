@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Read-only situational awareness across your live Claude Code sessions. Open one window, see what every other window is doing.",
   "bin": {
-    "conductor": "scan.js",
+    "conductor": "cli.js",
     "conductor-cockpit": "server.js",
     "conductor-mcp": "mcp.js"
   },
