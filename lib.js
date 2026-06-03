@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const readline = require('readline');
+const { execSync } = require('child_process');
 
 const HOME = os.homedir();
 const PROJECTS_DIR = path.join(HOME, '.claude', 'projects');
@@ -177,12 +178,51 @@ function lastAction(s) {
   return s.recent.length ? s.recent[s.recent.length - 1].summary : '—';
 }
 
-// status: how alive is this window, by REAL last activity (not file-touch time).
-function statusOf(lastActivityTs) {
+// status: how alive is this window.
+//   active = open process AND wrote in last 5 min (working right now)
+//   open   = a live `claude` process exists for it, but it's been quiet
+//   recent = no detected process, but wrote within the hour
+//   idle   = quiet and no process (likely closed; only shown via a wide time window)
+function statusOf(lastActivityTs, isOpen) {
   const min = (Date.now() - lastActivityTs) / 60000;
-  if (min < 5) return 'active';   // working right now
-  if (min < 60) return 'recent';  // active within the hour
-  return 'idle';                  // open/touched but quiet for hours
+  if (isOpen) return min < 5 ? 'active' : 'open';
+  if (min < 5) return 'active';
+  if (min < 60) return 'recent';
+  return 'idle';
+}
+const STATUS_RANK = { active: 0, open: 1, recent: 2, idle: 3 };
+
+// Detect actually-open windows by their running `claude` process. The transcript file
+// isn't held open, so process presence (not file mtime) is the real "this window is open"
+// signal. Many windows can share one cwd, so for a cwd with K live processes we treat the
+// K most-recently-used transcripts in that folder as those windows (best-effort heuristic).
+function listOpenWindows() {
+  const result = { files: new Set(), count: 0 };
+  let out;
+  try {
+    out = execSync('lsof -a -c claude -d cwd -nP -Fpn', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 4000 });
+  } catch { return result; }
+
+  const cwdCounts = new Map();
+  for (const line of out.split('\n')) {
+    if (line[0] === 'n') {
+      const cwd = line.slice(1);
+      cwdCounts.set(cwd, (cwdCounts.get(cwd) || 0) + 1);
+    }
+  }
+  for (const [cwd, k] of cwdCounts) {
+    const dir = path.join(PROJECTS_DIR, cwd.replace(/\//g, '-'));
+    let names;
+    try { names = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl')); }
+    catch { continue; }
+    const newest = names
+      .map((f) => { const p = path.join(dir, f); let m = 0; try { m = fs.statSync(p).mtimeMs; } catch { } return { p, m }; })
+      .sort((a, b) => b.m - a.m)
+      .slice(0, k);
+    for (const { p } of newest) result.files.add(p);
+    result.count += newest.length;
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -195,10 +235,13 @@ async function collectSessions(opts = {}) {
 
   const files = findTranscripts(PROJECTS_DIR, []);
   const cutoff = Date.now() - minutes * 60 * 1000;
+  const open = opts.detectOpen === false ? { files: new Set() } : listOpenWindows();
 
+  // Candidate files = open windows (always) ∪ recently-touched (time filter).
   const fresh = [];
   for (const f of files) {
     try {
+      if (open.files.has(f)) { fresh.push(f); continue; }
       const st = fs.statSync(f);
       if (all || st.mtimeMs >= cutoff) fresh.push(f);
     } catch { /* ignore */ }
@@ -213,10 +256,15 @@ async function collectSessions(opts = {}) {
     if (!prev || s.lastActivityTs > prev.lastActivityTs) bySession.set(s.sessionId, s);
   }
 
-  let sessions = [...bySession.values()].sort((a, b) => b.lastActivityTs - a.lastActivityTs);
+  let sessions = [...bySession.values()].sort((a, b) => {
+    const ra = STATUS_RANK[statusOf(a.lastActivityTs, open.files.has(a.file))];
+    const rb = STATUS_RANK[statusOf(b.lastActivityTs, open.files.has(b.file))];
+    return ra - rb || b.lastActivityTs - a.lastActivityTs;
+  });
   if (limit > 0) sessions = sessions.slice(0, limit);
 
   return sessions.map((s) => ({
+    open: open.files.has(s.file),
     sessionId: s.sessionId,
     shortId: s.sessionId ? s.sessionId.slice(0, 8) : '????????',
     label: labelFor(s.cwd),                 // the KEY — friendly project name
@@ -227,7 +275,7 @@ async function collectSessions(opts = {}) {
     intent: s.lastPrompt || s.lastUserText || null,
     lastAction: lastAction(s),
     recent: s.recent.slice(-12),
-    status: statusOf(s.lastActivityTs),
+    status: statusOf(s.lastActivityTs, open.files.has(s.file)),
     lastActiveTs: s.lastActivityTs,
     lastActiveRel: relTime(s.lastActivityTs),
     file: s.file,

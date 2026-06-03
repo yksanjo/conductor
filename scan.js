@@ -25,7 +25,7 @@ function parseArgs(argv) {
   return a;
 }
 
-const DOT = { active: '🟢', recent: '🟢', idle: '🟡' };
+const DOT = { active: '🟢', open: '🟢', recent: '🟡', idle: '⚪' };
 
 async function main() {
   const args = parseArgs(process.argv);

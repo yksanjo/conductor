@@ -97,6 +97,7 @@ ok('A: aiTitle captured as task', a.task === 'Build the login form');
 ok('A: lastPrompt captured as intent', a.intent === 'add a login form');
 ok('A: last action is the Edit tool (not the tool_result after it)', /Edit/.test(a.lastAction));
 ok('A: status is active/recent (activity <60m ago)', a.status === 'active' || a.status === 'recent');
+ok('A: has open flag (boolean)', typeof a.open === 'boolean');
 
 const b = json.sessions.find((s) => s.sessionId === sessB);
 ok('B: task captured', b.task === 'Research pricing');

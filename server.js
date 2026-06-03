@@ -33,7 +33,7 @@ const PAGE = /* html */ `<!doctype html>
   :root {
     --bg:#0b0b11; --panel:#15151f; --panel2:#1c1c2a; --line:#2a2a3d;
     --txt:#ececf4; --mut:#8a8aa3; --dim:#5d5d75;
-    --active:#36e07f; --recent:#4bd0c0; --idle:#f5b942;
+    --active:#36e07f; --open:#4bd0c0; --recent:#f5b942; --idle:#6a6a85;
     --accent:#b06cff; --accent2:#ff5cc8;
   }
   * { box-sizing:border-box; }
@@ -71,13 +71,18 @@ const PAGE = /* html */ `<!doctype html>
   .card:hover { transform:translateY(-3px); border-color:#3a3a55; box-shadow:0 12px 30px rgba(0,0,0,.45); }
   .card .bar { position:absolute; left:0; top:0; bottom:0; width:3px; }
   .card.active .bar { background:var(--active); }
+  .card.open   .bar { background:var(--open); }
   .card.recent .bar { background:var(--recent); }
   .card.idle  .bar { background:var(--idle); opacity:.6; }
+  .card.idle { opacity:.72; }
   .row1 { display:flex; align-items:center; gap:8px; margin-bottom:3px; }
   .dot { width:9px; height:9px; border-radius:50%; flex:none; }
   .active .dot { background:var(--active); box-shadow:0 0 8px var(--active); }
+  .open   .dot { background:var(--open); box-shadow:0 0 7px var(--open); }
   .recent .dot { background:var(--recent); }
   .idle  .dot { background:var(--idle); }
+  .legend { display:flex; gap:13px; font-size:11px; color:var(--mut); align-items:center; }
+  .legend i { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:5px; vertical-align:middle; }
   .label { font-size:17px; font-weight:680; letter-spacing:.2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .task { color:var(--mut); font-size:13px; min-height:18px; margin:2px 0 12px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
   .meta { display:flex; align-items:center; gap:8px; font-size:11px; color:var(--dim); }
@@ -106,6 +111,11 @@ const PAGE = /* html */ `<!doctype html>
   <h1>🎼 <span class="g">Conductor</span></h1>
   <span class="count" id="count"></span>
   <span class="spacer"></span>
+  <div class="legend">
+    <span><i style="background:#36e07f"></i>working</span>
+    <span><i style="background:#4bd0c0"></i>open</span>
+    <span><i style="background:#f5b942"></i>recent</span>
+  </div>
   <div class="seg" id="seg">
     <button data-m="10">10m</button>
     <button data-m="60" class="on">1h</button>
