@@ -1,0 +1,18 @@
+{
+  "name": "conductor-cli",
+  "version": "0.1.0",
+  "description": "Read-only situational awareness across your live Claude Code sessions. Open one window, see what every other window is doing.",
+  "bin": {
+    "conductor": "scan.js"
+  },
+  "scripts": {
+    "start": "node scan.js",
+    "test": "node test.js"
+  },
+  "keywords": ["claude-code", "cli", "agents", "orchestration", "dashboard"],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {}
+}
