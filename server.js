@@ -360,20 +360,44 @@ async function handle(req, res) {
   res.end('not found');
 }
 
+function openBrowser(url) {
+  if (process.platform === 'darwin') exec(`open ${url}`);
+  else if (process.platform === 'linux') exec(`xdg-open ${url}`);
+  else console.log(`open ${url}`);
+}
+
 function main() {
   const args = parseArgs(process.argv);
+  const url = `http://localhost:${args.port}`;
   const server = http.createServer(handle);
+
   server.on('error', (e) => {
     if (e.code === 'EADDRINUSE') {
-      console.error(`Port ${args.port} is busy. Conductor may already be running → http://localhost:${args.port}\nOr pick another: conductor-cockpit --port 8080`);
-    } else { console.error('conductor server error:', e.message); }
+      // Already running? If it answers like a conductor cockpit, just open it (idempotent).
+      const req = http.get({ host: '127.0.0.1', port: args.port, path: '/api/sessions?minutes=1', timeout: 1500 }, (r) => {
+        let d = ''; r.on('data', (c) => d += c);
+        r.on('end', () => {
+          if (d.includes('"sessions"')) {
+            console.log(`🎼 Conductor is already running → ${url}  (opening it)`);
+            if (args.open) openBrowser(url);
+            process.exit(0);
+          } else {
+            console.error(`Port ${args.port} is in use by something else. Try: conductor up --port 8080`);
+            process.exit(1);
+          }
+        });
+      });
+      req.on('error', () => { console.error(`Port ${args.port} is busy. Try: conductor up --port 8080`); process.exit(1); });
+      req.on('timeout', () => { req.destroy(); console.error(`Port ${args.port} is busy. Try: conductor up --port 8080`); process.exit(1); });
+      return;
+    }
+    console.error('conductor server error:', e.message);
     process.exit(1);
   });
+
   server.listen(args.port, '127.0.0.1', () => {
-    const url = `http://localhost:${args.port}`;
     console.log(`🎼 Conductor cockpit → ${url}  (read-only; Ctrl+C to stop)`);
-    if (args.open && process.platform === 'darwin') exec(`open ${url}`);
-    else if (args.open && process.platform === 'linux') exec(`xdg-open ${url}`);
+    if (args.open) openBrowser(url);
   });
 }
 
