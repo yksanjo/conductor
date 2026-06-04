@@ -232,11 +232,13 @@ const QUICK = [
 ];
 
 function ctrlHTML(s) {
-  const L = esc(s.mlabel);
-  const btns = QUICK.map(q => '<button class="qb" data-label="'+L+'" data-text="'+esc(q[1])+'">'+q[0]+'</button>').join('');
+  // Managed windows send directly (data-label). Plain windows adopt-then-send (data-session).
+  const attr = s.managed ? 'data-label="'+esc(s.mlabel)+'"' : 'data-session="'+esc(s.sessionId)+'"';
+  const ph = s.managed ? 'reply to '+esc(s.mlabel)+'…' : 'reply — adopts this window…';
+  const btns = QUICK.map(q => '<button class="qb" '+attr+' data-text="'+esc(q[1])+'">'+q[0]+'</button>').join('');
   return '<div class="ctrl"><div class="qbtns">'+btns+'</div>'
-       + '<div class="qrow"><input class="qin" data-label="'+L+'" placeholder="reply to '+L+'…">'
-       + '<button class="qsend" data-label="'+L+'">↵</button></div></div>';
+       + '<div class="qrow"><input class="qin" '+attr+' placeholder="'+ph+'">'
+       + '<button class="qsend" '+attr+'>↵</button></div></div>';
 }
 
 function cardHTML(s) {
@@ -248,8 +250,8 @@ function cardHTML(s) {
       </div>
       <div class="label">\${esc(s.title || s.label)}</div>
       <div class="task">\${esc(s.lastAction || s.intent || '—')}</div>
-      <div class="cfoot">\${s.place ? '<span class="chip">'+esc(s.place)+'</span>' : ''}\${s.gitBranch ? '<span class="chip">'+esc(s.gitBranch)+'</span>' : ''}\${s.managed ? '' : '<button class="badopt" data-adopt="'+s.sessionId+'">⤵ control</button>'}</div>
-      \${s.managed ? ctrlHTML(s) : ''}
+      <div class="cfoot">\${s.place ? '<span class="chip">'+esc(s.place)+'</span>' : ''}\${s.gitBranch ? '<span class="chip">'+esc(s.gitBranch)+'</span>' : ''}\${s.managed ? '<span class="mbadge">managed</span>' : ''}</div>
+      \${ctrlHTML(s)}
     </div>\`;
 }
 
@@ -275,13 +277,16 @@ async function replyAll(text) {
     toast(j.ok ? '⚡ sent “'+text+'” to '+j.sent+' window'+(j.sent===1?'':'s') : 'broadcast failed');
   } catch(e) { toast('broadcast failed'); }
 }
-async function adoptWin(sessionId) {
-  toast('adopting… opening a managed copy in tmux');
+// reply to a plain (unmanaged) window: adopt it into tmux, then deliver the message there
+async function replyAdopt(sessionId, text) {
+  if (!text || !text.trim()) return;
+  toast('adopting window + sending “'+text+'”…');
   try {
-    const r = await fetch('/api/adopt', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({session:sessionId}) });
+    const r = await fetch('/api/adopt-say', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({session:sessionId, text}) });
     const j = await r.json();
-    toast(j.ok ? '✓ adopted as “'+j.label+'” — answer its trust prompt (reply 1), then close the old tab' : 'adopt failed: '+(j.error||'?'));
-  } catch(e) { toast('adopt failed'); }
+    toast(j.ok ? '✓ “'+j.label+'” adopted — reply goes to the managed copy; close the original tab' : 'failed: '+(j.error||'?'));
+    lastHash=''; load();
+  } catch(e) { toast('failed'); }
 }
 // build broadcast quick-buttons once
 document.getElementById('bbtns').innerHTML = QUICK.map(q => '<button class="qb" data-all="'+esc(q[1])+'">'+q[0]+'</button>').join('');
@@ -364,17 +369,18 @@ document.getElementById('seg').addEventListener('click', e=>{
 });
 // delegated card + control handlers (survive innerHTML refresh)
 const boardEl = document.getElementById('board');
+function dispatchReply(el, text) {
+  if (el.dataset.label != null) reply(el.dataset.label, text);              // managed → direct
+  else if (el.dataset.session != null) replyAdopt(el.dataset.session, text); // plain → adopt + send
+}
 boardEl.addEventListener('click', e=>{
   const qb = e.target.closest('.qb,.qsend');
   if (qb) {
     e.stopPropagation();
-    const label = qb.dataset.label;
-    if (qb.classList.contains('qsend')) { const inp = qb.parentElement.querySelector('.qin'); reply(label, inp.value); inp.value=''; }
-    else reply(label, qb.dataset.text);
+    if (qb.classList.contains('qsend')) { const inp = qb.parentElement.querySelector('.qin'); dispatchReply(qb, inp.value); inp.value=''; }
+    else dispatchReply(qb, qb.dataset.text);
     return;
   }
-  const ab = e.target.closest('.badopt');
-  if (ab) { e.stopPropagation(); adoptWin(ab.dataset.adopt); return; }
   if (e.target.closest('.ctrl')) return;       // clicks in the reply area shouldn't open the modal
   const card = e.target.closest('.card');
   if (card) openCard(card.dataset.id);
@@ -391,7 +397,7 @@ document.getElementById('binput').addEventListener('keydown', e=>{
 });
 boardEl.addEventListener('keydown', e=>{
   if (e.target.classList && e.target.classList.contains('qin') && e.key==='Enter') {
-    reply(e.target.dataset.label, e.target.value); e.target.value=''; e.stopPropagation();
+    dispatchReply(e.target, e.target.value); e.target.value=''; e.stopPropagation();
   }
 });
 document.getElementById('scrim').addEventListener('click', e=>{ if(e.target.id==='scrim') closeModal(); });
@@ -465,6 +471,34 @@ async function handle(req, res) {
       const r = manage.run(label, [], cwd, { capture: false });   // non-blocking; lazy-resolve later
       if (r.ok) scheduleTrust(r.label);                           // auto-answer trust prompt
       sendJSON(res, r.ok ? 200 : 400, r);
+    });
+    return;
+  }
+
+  // Reply to a plain window: adopt it (if not already managed), then deliver the message.
+  if (url.pathname === '/api/adopt-say' && req.method === 'POST') {
+    readBody(req, async (p) => {
+      try {
+        const text = p.text || '';
+        const existing = manage.managedBySession()[p.session];
+        if (existing) {                       // already managed → just send
+          const r = manage.say(existing.label, text);
+          return sendJSON(res, r.ok ? 200 : 400, { ...r, label: existing.label });
+        }
+        const rows = await collectSessions({ minutes: 4320 });
+        const s = rows.find((r) => r.sessionId === p.session || r.shortId === p.session);
+        if (!s) return sendJSON(res, 400, { ok: false, error: 'session not found' });
+        const label = manage.sanitize(s.label) || s.shortId;
+        const r = manage.adopt(label, s.sessionId, s.cwd, { capture: false });
+        if (r.ok) {
+          scheduleTrust(label);               // accept trust prompt
+          if (text.trim()) setTimeout(() => { try { manage.say(label, text); } catch { /* ignore */ } }, 6500); // after it's ready
+          return sendJSON(res, 200, { ok: true, label, adopted: true });
+        }
+        // adopt failed (commonly: a managed copy of this window already exists) → send to it
+        const sr = manage.say(label, text);
+        sendJSON(res, sr.ok ? 200 : 400, { ok: sr.ok, label, error: sr.ok ? undefined : r.error });
+      } catch (e) { sendJSON(res, 500, { ok: false, error: e.message }); }
     });
     return;
   }
