@@ -89,6 +89,9 @@ conductor up --port 8080    # custom port
 conductor up --no-open      # don't auto-open
 ```
 
+Tap **📖** in the header for a one-page quick manual (also at `/manual`, or as a
+printable [PDF](docs/manual.pdf)).
+
 ### Custom labels (the "key")
 
 The big label on each card comes from the working directory, auto-prettified. To give a

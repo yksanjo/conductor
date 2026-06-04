@@ -11,9 +11,14 @@
 
 const http = require('http');
 const os = require('os');
+const fs = require('fs');
+const path = require('path');
 const { exec } = require('child_process');
 const { collectSessions } = require('./lib');
 const manage = require('./manage');
+
+let MANUAL = '<!doctype html><title>Conductor manual</title><body style="font:14px sans-serif;padding:40px">Manual not found.</body>';
+try { MANUAL = fs.readFileSync(path.join(__dirname, 'docs', 'manual.html'), 'utf8'); } catch { /* ignore */ }
 
 function parseArgs(argv) {
   const a = { port: parseInt(process.env.CONDUCTOR_PORT, 10) || 7591, open: true };
@@ -63,6 +68,7 @@ const PAGE = /* html */ `<!doctype html>
   }
   .brand { display:flex; align-items:center; gap:9px; font-size:14.5px; font-weight:640; letter-spacing:.2px; }
   .brand .mk { background:linear-gradient(92deg,var(--accent),var(--accent2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .brand .ck { color:var(--mut); font-weight:500; letter-spacing:1px; }
   .live { width:7px; height:7px; border-radius:50%; background:var(--active); box-shadow:0 0 0 0 var(--active); animation:pulse 2.4s infinite; }
   @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(62,224,127,.45);} 70%{box-shadow:0 0 0 8px rgba(62,224,127,0);} 100%{box-shadow:0 0 0 0 rgba(62,224,127,0);} }
   .count { color:var(--mut); font-size:12.5px; font-variant-numeric:tabular-nums; }
@@ -75,6 +81,8 @@ const PAGE = /* html */ `<!doctype html>
   .seg button.on { background:rgba(255,255,255,.09); color:var(--txt); box-shadow:0 1px 2px rgba(0,0,0,.3); }
   .newbtn { font:inherit; font-size:12px; font-weight:650; color:var(--txt); background:linear-gradient(92deg,var(--accent),var(--accent2)); border:0; border-radius:9px; padding:7px 13px; cursor:pointer; transition:.12s; }
   .newbtn:hover { filter:brightness(1.1); }
+  .manbtn { text-decoration:none; font-size:15px; line-height:1; padding:7px 9px; border:1px solid var(--line); border-radius:9px; background:rgba(255,255,255,.04); cursor:pointer; }
+  .manbtn:hover { border-color:var(--line2); }
   .modal .qin { width:100%; }
 
   main { padding:14px 24px 64px; max-width:1500px; margin:0 auto; }
@@ -163,7 +171,7 @@ const PAGE = /* html */ `<!doctype html>
 <body>
 <header>
   <span class="live"></span>
-  <span class="brand">🎼 <span class="mk">Conductor</span></span>
+  <span class="brand">🎼 <span class="mk">Conductor</span> <span class="ck">Cockpit</span></span>
   <span class="count" id="count"></span>
   <span class="spacer"></span>
   <div class="legend">
@@ -178,6 +186,7 @@ const PAGE = /* html */ `<!doctype html>
     <button data-m="all">all</button>
   </div>
   <button class="newbtn" id="newbtn">+ New window</button>
+  <a class="manbtn" href="/manual" target="_blank" title="Quick manual">📖</a>
 </header>
 <main>
   <div class="bcast" id="bcast" style="display:none">
@@ -533,6 +542,11 @@ async function handle(req, res) {
         sendJSON(res, r.ok ? 200 : 400, r);
       } catch (e) { sendJSON(res, 500, { ok: false, error: e.message }); }
     });
+    return;
+  }
+  if (url.pathname === '/manual') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(MANUAL);
     return;
   }
   if (url.pathname === '/' || url.pathname === '/index.html') {

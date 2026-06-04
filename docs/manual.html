@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Conductor — Quick Manual</title>
+<style>
+  :root{
+    --bg:#08080b; --card:#12121a; --line:rgba(255,255,255,.09); --txt:#f3f3f8; --mut:#9a9aae; --dim:#62627a;
+    --active:#3ee07f; --open:#46d8c6; --recent:#f5b13f; --accent:#a974ff; --accent2:#ff5cc8;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
+    --sans:ui-sans-serif,-apple-system,"SF Pro Text",Inter,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--txt);font-family:var(--sans);display:flex;justify-content:center;padding:34px 18px;
+    background-image:radial-gradient(600px 320px at 90% -10%,rgba(169,116,255,.14),transparent 70%);}
+  .card{width:660px;max-width:100%;background:var(--card);border:1px solid var(--line);border-radius:18px;padding:26px 28px;}
+  .top{display:flex;align-items:baseline;justify-content:space-between;border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:16px}
+  h1{font-size:21px;font-weight:700}
+  h1 .g{background:linear-gradient(92deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent}
+  h1 .ck{color:var(--mut);font-weight:500;letter-spacing:1px}
+  .sub{font-size:11.5px;color:var(--dim);font-family:var(--mono)}
+  .row{display:flex;gap:13px;margin:13px 0}
+  .row .lbl{flex:none;width:118px;font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--mut);padding-top:2px}
+  .row .body{flex:1;font-size:13.5px;line-height:1.6;color:var(--txt)}
+  code{font-family:var(--mono);font-size:12px;background:rgba(255,255,255,.06);border:1px solid var(--line);border-radius:6px;padding:1.5px 6px;color:#e9e2ff}
+  .muted{color:var(--mut)}
+  .dots span{display:inline-flex;align-items:center;gap:6px;margin-right:16px;font-size:12.5px}
+  .dots i{width:9px;height:9px;border-radius:50%;display:inline-block}
+  .chips span{display:inline-block;font-size:11.5px;background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:7px;padding:3px 9px;margin:0 5px 5px 0;font-weight:600}
+  .note{margin-top:18px;padding-top:14px;border-top:1px solid var(--line);font-size:12px;color:var(--mut);line-height:1.55}
+  .note b{color:var(--txt)}
+  .print{margin-top:14px;font-size:11px;color:var(--dim)}
+  @media print{ body{background:#fff;color:#111;padding:0} .card{border:none;width:100%} .print{display:none}
+    code{background:#f0f0f4;border-color:#ddd;color:#3a2a6b} h1 .g{color:#7a3cff;-webkit-text-fill-color:#7a3cff} }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="top">
+      <h1>🎼 <span class="g">Conductor</span> <span class="ck">Cockpit</span></h1>
+      <span class="sub">quick manual · github.com/yksanjo/conductor</span>
+    </div>
+
+    <div class="row"><div class="lbl">Open it</div><div class="body"><code>conductor up</code> → opens the cockpit at <code>localhost:7591</code>. Or <code>conductor</code> for a quick terminal table.</div></div>
+
+    <div class="row"><div class="lbl">Status dots</div><div class="body dots">
+      <span><i style="background:var(--active)"></i>working now</span>
+      <span><i style="background:var(--open)"></i>open (idle)</span>
+      <span><i style="background:var(--recent)"></i>recent</span>
+      <span class="muted"><i style="background:#6a6a85"></i>idle</span>
+    </div></div>
+
+    <div class="row"><div class="lbl">Reply to one</div><div class="body">Type in a card's box and press <code>↵</code>, or tap a quick button:
+      <div class="chips" style="margin-top:6px"><span>Yes</span><span>No</span><span>Continue</span><span>Review</span><span>Re-iterate</span><span>Test+deploy</span></div></div></div>
+
+    <div class="row"><div class="lbl">Prompt all</div><div class="body">Use the <b style="color:var(--accent)">⚡ Prompt all managed</b> bar at the top to message every managed window at once.</div></div>
+
+    <div class="row"><div class="lbl">New window</div><div class="body"><b>+ New window</b> button (name + folder), or <code>conductor run &lt;name&gt;</code>. It launches in tmux and auto-accepts the trust prompt.</div></div>
+
+    <div class="row"><div class="lbl">Adopt existing</div><div class="body">Reply on any plain window's card to pull it under control, or <code>conductor adopt &lt;id&gt;</code>. Then close the original tab.</div></div>
+
+    <div class="row"><div class="lbl">Type a lot</div><div class="body"><code>conductor attach &lt;name&gt;</code> drops you into the window to type long commands directly.</div></div>
+
+    <div class="row"><div class="lbl">From any agent</div><div class="body">It's an MCP server too: <span class="muted">"use conductor to list my sessions / what's left?"</span></div></div>
+
+    <div class="note"><b>How control works:</b> a reply goes to the window's Claude session running in <b>tmux</b> — watch the response in the card's "doing now" line, or <code>conductor attach</code> to see it live. Plain terminal windows can't take input directly, so replying to one <b>adopts</b> it (forks it into a managed copy) first.</div>
+    <div class="print">Save as PDF: ⌘P → Save as PDF.</div>
+  </div>
+</body>
+</html>
