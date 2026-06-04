@@ -31,8 +31,10 @@ summary), grouped into **Working now / Open / Recently active / Idle**. Open the
 version with `conductor up`.
 
 No new infrastructure. Conductor reads the transcript that every Claude Code session
-**already writes** to `~/.claude/projects/`. It's **read-only** — it never touches,
-writes to, or interrupts a running session. Zero dependencies.
+**already writes** to `~/.claude/projects/`. **Observation is read-only**; control
+(replies, launch, adopt) is **opt-in and works only on windows you hand it** via tmux.
+Zero dependencies. The server binds to `127.0.0.1` only, and state-changing requests
+require a local origin + an `X-Conductor` header (CSRF / DNS-rebinding guard).
 
 ## How it works
 
@@ -81,7 +83,7 @@ conductor ls --json      # structured JSON
 
 A live, glanceable dashboard. Big friendly label per window, color-coded status
 (🟢 working now · 🟡 idle), click a card for full detail (goal, last action, recent
-timeline). Auto-refreshes every 4s. Read-only.
+timeline). Auto-refreshes every 4s (read-only observation).
 
 ```bash
 conductor up                # starts on :7591 and opens your browser
@@ -194,6 +196,13 @@ continue in the managed window.
   appear (widen with `--minutes`). Per-row time shows *true* last activity.
 - **Claude Code only**, local machine only.
 - It only reads **your own** `~/.claude` — never another user's transcripts.
+- **The "open" signal needs `lsof`** (and a `claude`-named process) — primarily macOS. If
+  `lsof` is missing/unavailable, liveness falls back to recent file writes (nothing shows
+  as "open", just "recent"/"idle").
+- **Control = a control plane, not read-only.** The cockpit's POST endpoints inject
+  keystrokes into managed windows. They're guarded (localhost bind + origin + `X-Conductor`
+  header) so a stray web page can't reach them, but treat the cockpit as something you run
+  for yourself, not a public service.
 
 ## License
 

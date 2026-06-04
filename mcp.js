@@ -14,7 +14,7 @@
 const { collectSessions } = require('./lib');
 
 const PROTOCOL_VERSION = '2024-11-05';
-const SERVER_INFO = { name: 'conductor', version: '0.3.0' };
+const SERVER_INFO = { name: 'conductor', version: '0.4.0' };
 
 const TOOLS = [
   {

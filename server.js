@@ -13,7 +13,7 @@ const http = require('http');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
-const { exec } = require('child_process');
+const { execFile } = require('child_process');
 const { collectSessions } = require('./lib');
 const manage = require('./manage');
 
@@ -290,7 +290,7 @@ function toast(msg) {
 async function reply(label, text) {
   if (!text || !text.trim()) return;
   try {
-    const r = await fetch('/api/say', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({label, text}) });
+    const r = await fetch('/api/say', { method:'POST', headers:{'content-type':'application/json','x-conductor':'1'}, body:JSON.stringify({label, text}) });
     const j = await r.json();
     toast(j.ok ? '→ sent “'+text+'” to '+label : 'send failed: '+(j.error||'?'));
   } catch(e) { toast('send failed'); }
@@ -298,7 +298,7 @@ async function reply(label, text) {
 async function replyAll(text) {
   if (!text || !text.trim()) return;
   try {
-    const r = await fetch('/api/say-all', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({text}) });
+    const r = await fetch('/api/say-all', { method:'POST', headers:{'content-type':'application/json','x-conductor':'1'}, body:JSON.stringify({text}) });
     const j = await r.json();
     toast(j.ok ? '⚡ sent “'+text+'” to '+j.sent+' window'+(j.sent===1?'':'s') : 'broadcast failed');
   } catch(e) { toast('broadcast failed'); }
@@ -308,7 +308,7 @@ async function replyAdopt(sessionId, text) {
   if (!text || !text.trim()) return;
   toast('adopting window + sending “'+text+'”…');
   try {
-    const r = await fetch('/api/adopt-say', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({session:sessionId, text}) });
+    const r = await fetch('/api/adopt-say', { method:'POST', headers:{'content-type':'application/json','x-conductor':'1'}, body:JSON.stringify({session:sessionId, text}) });
     const j = await r.json();
     toast(j.ok ? '✓ “'+j.label+'” adopted — reply goes to the managed copy; close the original tab' : 'failed: '+(j.error||'?'));
     lastHash=''; load();
@@ -335,7 +335,7 @@ async function launchWin() {
   if (!label) { toast('give it a name'); return; }
   toast('launching “'+label+'”…');
   try {
-    const r = await fetch('/api/run', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({label, cwd}) });
+    const r = await fetch('/api/run', { method:'POST', headers:{'content-type':'application/json','x-conductor':'1'}, body:JSON.stringify({label, cwd}) });
     const j = await r.json();
     if (j.ok) { toast('✓ launched “'+j.label+'” — reply 1 to its trust prompt'); closeModal(); lastHash=''; load(); }
     else toast('launch failed: '+(j.error||'?'));
@@ -435,14 +435,38 @@ setInterval(load, 4000);
 </body>
 </html>`;
 
-function readBody(req, cb) {
-  let b = '';
-  req.on('data', (c) => { b += c; if (b.length > 8192) req.destroy(); });
-  req.on('end', () => { let p; try { p = JSON.parse(b || '{}'); } catch { p = {}; } cb(p); });
-}
 function sendJSON(res, code, obj) {
   res.writeHead(code, { 'content-type': 'application/json' });
   res.end(JSON.stringify(obj));
+}
+function readBody(req, res, cb) {
+  let b = '', over = false;
+  req.on('data', (c) => {
+    b += c;
+    if (b.length > 8192 && !over) { over = true; sendJSON(res, 413, { ok: false, error: 'body too large' }); req.destroy(); }
+  });
+  req.on('end', () => { if (over) return; let p; try { p = JSON.parse(b || '{}'); } catch { p = {}; } cb(p); });
+}
+
+// CSRF + DNS-rebinding guard for state-changing (POST) requests. The control endpoints
+// inject keystrokes into live Claude windows, so a malicious page in the same browser must
+// not be able to fire them. Three checks; any one largely closes it, we require all:
+//  - Host must be localhost/127.0.0.1 (defeats DNS rebinding)
+//  - Origin (when present) must be local (blocks cross-site form/fetch)
+//  - a custom X-Conductor header — a cross-origin "simple request" can't set it without a
+//    preflight, which we never answer, so the side effect never fires.
+function localHost(req) {
+  const h = (req.headers.host || '').split(':')[0].replace(/^\[|\]$/g, '');
+  return h === 'localhost' || h === '127.0.0.1' || h === '::1';
+}
+function localOrigin(req) {
+  const o = req.headers.origin;
+  if (!o || o === 'null') return true;
+  try { const u = new URL(o); return u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '::1'; }
+  catch { return false; }
+}
+function writeAllowed(req) {
+  return localHost(req) && localOrigin(req) && req.headers['x-conductor'] === '1';
 }
 // Non-blocking: poke the new window a few times to accept its "trust this folder?" prompt
 // (only fires Enter when the prompt is actually showing — see manage.trustPromptShowing).
@@ -454,6 +478,10 @@ function scheduleTrust(label) {
 
 async function handle(req, res) {
   const url = new URL(req.url, 'http://localhost');
+  // All state-changing endpoints are POST; gate them against CSRF / DNS rebinding.
+  if (req.method === 'POST' && !writeAllowed(req)) {
+    return sendJSON(res, 403, { ok: false, error: 'forbidden — local origin + X-Conductor header required' });
+  }
   if (url.pathname === '/api/sessions') {
     const all = url.searchParams.get('all') === '1';
     const minutes = parseInt(url.searchParams.get('minutes'), 10) || 60;
@@ -474,7 +502,7 @@ async function handle(req, res) {
   }
 
   if (url.pathname === '/api/say' && req.method === 'POST') {
-    readBody(req, (p) => {
+    readBody(req, res, (p) => {
       const r = p.key ? manage.key(p.label, p.key) : manage.say(p.label, p.text || '');
       sendJSON(res, r.ok ? 200 : 400, r);
     });
@@ -483,13 +511,13 @@ async function handle(req, res) {
 
   // Broadcast to every managed window at once.
   if (url.pathname === '/api/say-all' && req.method === 'POST') {
-    readBody(req, (p) => sendJSON(res, 200, manage.sayAll(p)));
+    readBody(req, res, (p) => sendJSON(res, 200, manage.sayAll(p)));
     return;
   }
 
   // Launch a brand-new managed window (born in tmux, no fork needed).
   if (url.pathname === '/api/run' && req.method === 'POST') {
-    readBody(req, (p) => {
+    readBody(req, res, (p) => {
       const label = (p.label || '').trim();
       if (!label) return sendJSON(res, 400, { ok: false, error: 'label required' });
       let cwd = (p.cwd || '').trim();
@@ -503,7 +531,7 @@ async function handle(req, res) {
 
   // Reply to a plain window: adopt it (if not already managed), then deliver the message.
   if (url.pathname === '/api/adopt-say' && req.method === 'POST') {
-    readBody(req, async (p) => {
+    readBody(req, res, async (p) => {
       try {
         const text = p.text || '';
         const existing = manage.managedBySession()[p.session];
@@ -531,7 +559,7 @@ async function handle(req, res) {
 
   // Bring an existing (read-only) window under management by forking it into tmux.
   if (url.pathname === '/api/adopt' && req.method === 'POST') {
-    readBody(req, async (p) => {
+    readBody(req, res, async (p) => {
       try {
         const rows = await collectSessions({ minutes: 4320 });
         const s = rows.find((r) => r.sessionId === p.session || r.shortId === p.session);
@@ -559,8 +587,8 @@ async function handle(req, res) {
 }
 
 function openBrowser(url) {
-  if (process.platform === 'darwin') exec(`open ${url}`);
-  else if (process.platform === 'linux') exec(`xdg-open ${url}`);
+  if (process.platform === 'darwin') execFile('open', [url]);
+  else if (process.platform === 'linux') execFile('xdg-open', [url]);
   else console.log(`open ${url}`);
 }
 

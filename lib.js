@@ -160,6 +160,18 @@ function push(s, item) {
   if (s.recent.length > RING) s.recent.shift();
 }
 
+// Run `fn` over items with at most `limit` in flight — bounds concurrent file streams so a
+// huge ~/.claude/projects (or --all) can't exhaust file descriptors.
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let i = 0;
+  async function worker() {
+    while (i < items.length) { const idx = i++; out[idx] = await fn(items[idx]); }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
 function relTime(ts) {
   if (!ts) return 'unknown';
   const sec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
@@ -247,7 +259,7 @@ async function collectSessions(opts = {}) {
     } catch { /* ignore */ }
   }
 
-  const parsed = await Promise.all(fresh.map((f) => readSession(f)));
+  const parsed = await mapLimit(fresh, 24, readSession);   // cap open file streams (--all can be huge)
 
   const bySession = new Map();
   for (const s of parsed) {
