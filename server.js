@@ -124,6 +124,17 @@ const PAGE = /* html */ `<!doctype html>
   .toast { position:fixed; bottom:22px; left:50%; transform:translateX(-50%); background:#15151f; border:1px solid var(--line2); color:var(--txt); font-size:12.5px; padding:9px 16px; border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,.5); opacity:0; transition:opacity .2s; pointer-events:none; z-index:80; }
   .toast.show { opacity:1; }
 
+  /* broadcast bar */
+  .bcast { display:flex; align-items:center; gap:9px; flex-wrap:wrap; margin:18px 0 4px; padding:12px 14px;
+    background:linear-gradient(120deg,rgba(169,116,255,.10),rgba(255,92,200,.06)); border:1px solid rgba(169,116,255,.28); border-radius:13px; }
+  .bcast .blabel { font-size:12px; font-weight:700; letter-spacing:.3px; color:var(--txt); margin-right:2px; }
+  .bcast .blabel b { color:var(--accent); }
+  .bcast .bbtns { display:flex; flex-wrap:wrap; gap:5px; }
+  .bcast .qin { flex:1; min-width:160px; }
+  /* adopt ("control") button on read-only cards */
+  .badopt { font:inherit; font-size:10.5px; font-weight:650; color:var(--accent); background:rgba(169,116,255,.1); border:1px solid rgba(169,116,255,.3); border-radius:7px; padding:3px 9px; cursor:pointer; transition:.12s; }
+  .badopt:hover { background:rgba(169,116,255,.22); }
+
   .card.active { --c:var(--active); } .card.open { --c:var(--open); }
   .card.recent { --c:var(--recent); } .card.idle { --c:var(--idle); }
 
@@ -166,7 +177,16 @@ const PAGE = /* html */ `<!doctype html>
     <button data-m="all">all</button>
   </div>
 </header>
-<main><div id="board"></div><div class="empty" id="empty" style="display:none"></div></main>
+<main>
+  <div class="bcast" id="bcast" style="display:none">
+    <span class="blabel">⚡ Prompt all managed <b id="bcount">0</b></span>
+    <div class="bbtns" id="bbtns"></div>
+    <input class="qin" id="binput" placeholder="message all managed windows…">
+    <button class="qsend" id="bsend">↵</button>
+  </div>
+  <div id="board"></div>
+  <div class="empty" id="empty" style="display:none"></div>
+</main>
 
 <div class="scrim" id="scrim"><div class="modal" id="modal"></div></div>
 <div class="toast" id="toast"></div>
@@ -223,7 +243,7 @@ function cardHTML(s) {
       </div>
       <div class="label">\${esc(s.label)}</div>
       <div class="task">\${esc(s.task || s.intent || '—')}</div>
-      <div class="cfoot">\${s.gitBranch ? '<span class="chip">'+esc(s.gitBranch)+'</span>' : ''}</div>
+      <div class="cfoot">\${s.gitBranch ? '<span class="chip">'+esc(s.gitBranch)+'</span>' : ''}\${s.managed ? '' : '<button class="badopt" data-adopt="'+s.sessionId+'">⤵ control</button>'}</div>
       \${s.managed ? ctrlHTML(s) : ''}
     </div>\`;
 }
@@ -242,11 +262,32 @@ async function reply(label, text) {
     toast(j.ok ? '→ sent “'+text+'” to '+label : 'send failed: '+(j.error||'?'));
   } catch(e) { toast('send failed'); }
 }
+async function replyAll(text) {
+  if (!text || !text.trim()) return;
+  try {
+    const r = await fetch('/api/say-all', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({text}) });
+    const j = await r.json();
+    toast(j.ok ? '⚡ sent “'+text+'” to '+j.sent+' window'+(j.sent===1?'':'s') : 'broadcast failed');
+  } catch(e) { toast('broadcast failed'); }
+}
+async function adoptWin(sessionId) {
+  toast('adopting… opening a managed copy in tmux');
+  try {
+    const r = await fetch('/api/adopt', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({session:sessionId}) });
+    const j = await r.json();
+    toast(j.ok ? '✓ adopted as “'+j.label+'” — answer its trust prompt (reply 1), then close the old tab' : 'adopt failed: '+(j.error||'?'));
+  } catch(e) { toast('adopt failed'); }
+}
+// build broadcast quick-buttons once
+document.getElementById('bbtns').innerHTML = QUICK.map(q => '<button class="qb" data-all="'+esc(q[1])+'">'+q[0]+'</button>').join('');
 
 function render() {
   const board = document.getElementById('board');
   const empty = document.getElementById('empty');
   document.getElementById('count').textContent = DATA.length ? DATA.length+' window'+(DATA.length>1?'s':'') : '';
+  const mc = DATA.filter(s=>s.managed).length;
+  document.getElementById('bcount').textContent = mc;
+  document.getElementById('bcast').style.display = mc ? 'flex' : 'none';
   if (!DATA.length) {
     board.innerHTML=''; empty.style.display='block';
     empty.textContent = 'No sessions in this window. Try a wider range →';
@@ -301,9 +342,21 @@ boardEl.addEventListener('click', e=>{
     else reply(label, qb.dataset.text);
     return;
   }
+  const ab = e.target.closest('.badopt');
+  if (ab) { e.stopPropagation(); adoptWin(ab.dataset.adopt); return; }
   if (e.target.closest('.ctrl')) return;       // clicks in the reply area shouldn't open the modal
   const card = e.target.closest('.card');
   if (card) openCard(card.dataset.id);
+});
+// broadcast bar
+const bcastEl = document.getElementById('bcast');
+bcastEl.addEventListener('click', e=>{
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.id === 'bsend') { const i=document.getElementById('binput'); replyAll(i.value); i.value=''; }
+  else if (b.dataset.all != null) replyAll(b.dataset.all);
+});
+document.getElementById('binput').addEventListener('keydown', e=>{
+  if (e.key === 'Enter') { replyAll(e.target.value); e.target.value=''; }
 });
 boardEl.addEventListener('keydown', e=>{
   if (e.target.classList && e.target.classList.contains('qin') && e.key==='Enter') {
@@ -318,6 +371,16 @@ setInterval(load, 4000);
 </script>
 </body>
 </html>`;
+
+function readBody(req, cb) {
+  let b = '';
+  req.on('data', (c) => { b += c; if (b.length > 8192) req.destroy(); });
+  req.on('end', () => { let p; try { p = JSON.parse(b || '{}'); } catch { p = {}; } cb(p); });
+}
+function sendJSON(res, code, obj) {
+  res.writeHead(code, { 'content-type': 'application/json' });
+  res.end(JSON.stringify(obj));
+}
 
 async function handle(req, res) {
   const url = new URL(req.url, 'http://localhost');
@@ -341,13 +404,38 @@ async function handle(req, res) {
   }
 
   if (url.pathname === '/api/say' && req.method === 'POST') {
-    let body = '';
-    req.on('data', (c) => { body += c; if (body.length > 4096) req.destroy(); });
-    req.on('end', () => {
-      let p; try { p = JSON.parse(body || '{}'); } catch { p = {}; }
-      const res2 = p.key ? manage.key(p.label, p.key) : manage.say(p.label, p.text || '');
-      res.writeHead(res2.ok ? 200 : 400, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(res2));
+    readBody(req, (p) => {
+      const r = p.key ? manage.key(p.label, p.key) : manage.say(p.label, p.text || '');
+      sendJSON(res, r.ok ? 200 : 400, r);
+    });
+    return;
+  }
+
+  // Broadcast to every managed window at once.
+  if (url.pathname === '/api/say-all' && req.method === 'POST') {
+    readBody(req, (p) => {
+      const ws = manage.listManaged();
+      let sent = 0;
+      for (const w of ws) {
+        const r = p.key ? manage.key(w.label, p.key) : manage.say(w.label, p.text || '');
+        if (r.ok) sent++;
+      }
+      sendJSON(res, 200, { ok: true, sent, total: ws.length });
+    });
+    return;
+  }
+
+  // Bring an existing (read-only) window under management by forking it into tmux.
+  if (url.pathname === '/api/adopt' && req.method === 'POST') {
+    readBody(req, async (p) => {
+      try {
+        const rows = await collectSessions({ minutes: 4320 });
+        const s = rows.find((r) => r.sessionId === p.session || r.shortId === p.session);
+        if (!s) return sendJSON(res, 400, { ok: false, error: 'session not found' });
+        const label = manage.sanitize(s.label) || s.shortId;
+        const r = manage.adopt(label, s.sessionId, s.cwd);
+        sendJSON(res, r.ok ? 200 : 400, r);
+      } catch (e) { sendJSON(res, 500, { ok: false, error: e.message }); }
     });
     return;
   }
