@@ -56,6 +56,7 @@ function run(label, claudeArgs, cwd) {
   cwd = cwd || process.cwd();
   if (windowAlive(name)) return { ok: false, error: `a managed window "${name}" already exists. Use a different label or: conductor stop ${name}` };
 
+  const created = Date.now();      // anchor BEFORE launch so late-written transcripts still match
   const before = jsonlSet(cwd);
 
   if (!sessionExists()) {
@@ -81,9 +82,18 @@ function run(label, claudeArgs, cwd) {
   }
 
   const reg = loadReg();
-  reg.windows[name] = { label: name, target: target(name), cwd, created: Date.now(), sessionId };
+  reg.windows[name] = { label: name, target: target(name), cwd, created, sessionId };
   saveReg(reg);
   return { ok: true, label: name, target: target(name), sessionId, attach: attachCommand(name) };
+}
+
+// Adopt an existing session: re-open it in a managed tmux window by forking its history
+// (claude --resume <id> --fork-session). Forking avoids two live clients on one session id,
+// so the user's old tab can stay open until they close it. Returns run()'s result (the new,
+// forked sessionId is captured by polling, like a fresh launch).
+function adopt(label, sessionId, cwd) {
+  if (!sessionId) return { ok: false, error: 'no sessionId to adopt' };
+  return run(label, ['--resume', sessionId, '--fork-session'], cwd);
 }
 
 // Send a short reply (literal text + Enter). Reply text is passed as an arg, never shelled.
@@ -158,4 +168,4 @@ function managedBySession() {
   return map;
 }
 
-module.exports = { run, say, key, stop, listManaged, managedBySession, attachCommand, sanitize, hasTmux, SESSION, REG_FILE };
+module.exports = { run, adopt, say, key, stop, listManaged, managedBySession, attachCommand, sanitize, hasTmux, SESSION, REG_FILE };

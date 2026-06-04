@@ -139,6 +139,7 @@ through Conductor into a [tmux](https://github.com/tmux/tmux) session:
 
 ```bash
 conductor run soag            # launch a managed Claude window labelled "soag" (in tmux)
+conductor adopt <id> soag      # take an EXISTING session under management (see below)
 conductor say soag yes         # send a quick reply
 conductor say soag "review and test it before deploying"
 conductor attach soag          # drop into the window to type longer commands
@@ -152,6 +153,22 @@ send keystrokes straight into the live window.
 
 Quick replies are short by design. For long, complex instructions, `conductor attach` and
 type in the window directly. Requires `tmux` (`brew install tmux`).
+
+### Adopting an existing window
+
+A Claude window you opened yourself (in a plain terminal) can't be controlled — the OS
+won't let anything inject input into it. `conductor adopt` works around this by **forking
+the session into a managed tmux window**, keeping the full history:
+
+```bash
+conductor ls                  # find the session (note its 8-char id or label)
+conductor adopt 1a2b3c4d work  # re-open it (forked) as managed window "work"
+# ...then close the original tab; control "work" from CLI + cockpit
+```
+
+It runs \`claude --resume <id> --fork-session\` in the session's own project directory.
+Forking means no collision with the still-open original — but you should close that tab and
+continue in the managed window.
 
 ## Honest limits (v1)
 

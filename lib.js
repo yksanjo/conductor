@@ -125,7 +125,7 @@ function readSession(file) {
       try { r = JSON.parse(line); } catch { return; }
       if (!r || typeof r !== 'object') return;
       if (r.sessionId) s.sessionId = r.sessionId;
-      if (r.cwd) s.cwd = r.cwd;
+      if (r.cwd && !s.cwd) s.cwd = r.cwd;   // FIRST cwd = launch dir = the session's project (where --resume finds it)
       if (r.gitBranch) s.gitBranch = r.gitBranch;
       if (r.slug) s.slug = r.slug;
       if (r.isSidechain === true) s.isSidechain = true;

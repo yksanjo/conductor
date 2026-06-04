@@ -22,6 +22,8 @@ read
 
 control (tmux-managed windows)
   conductor run <label> [-- claude args]   launch a managed window in tmux
+  conductor adopt <session> [label]        re-open an existing session in tmux (forked),
+                                           so you can control it; then close the old tab
   conductor say <label> <text...>          send a reply into that window
   conductor attach <label>                 attach your terminal to it (type long commands)
   conductor managed                        list managed windows
@@ -42,8 +44,25 @@ function run(script, a) {
   child.on('error', (e) => { console.error('conductor: ' + e.message); process.exit(1); });
 }
 
-function manageCmd() {
+async function manageCmd() {
   const m = require('./manage');
+  if (cmd === 'adopt') {
+    const ref = rest[0];
+    if (!ref) { console.error('usage: conductor adopt <session|shortId|label> [newlabel]'); process.exit(1); }
+    const { collectSessions } = require('./lib');
+    const rows = await collectSessions({ minutes: 4320 });   // last ~3 days
+    const k = ref.toLowerCase();
+    const s = rows.find((r) => r.sessionId.toLowerCase() === k || r.shortId.toLowerCase() === k || (r.label || '').toLowerCase() === k);
+    if (!s) { console.error(`conductor: no live session matched "${ref}". See: conductor ls --all`); process.exit(1); }
+    const label = rest[1] || m.sanitize(s.label) || s.shortId;
+    const res = m.adopt(label, s.sessionId, s.cwd);
+    if (!res.ok) { console.error('conductor: ' + res.error); process.exit(1); }
+    console.log(`🎼 adopting ${s.shortId} (${s.label}) → managed window "${res.label}" — forked, full history kept.`);
+    console.log(`   ⚠ close the original tab to avoid two live copies of this session.`);
+    console.log(`   reply:  conductor say ${res.label} "yes"`);
+    console.log(`   attach: ${res.attach}`);
+    return;
+  }
   if (cmd === 'run') {
     const label = rest[0];
     if (!label) { console.error('usage: conductor run <label> [-- claude args]'); process.exit(1); }
@@ -90,8 +109,8 @@ function manageCmd() {
 
 if (['help', '-h', '--help'].includes(cmd)) {
   console.log(HELP);
-} else if (['run', 'say', 'attach', 'managed', 'stop'].includes(cmd)) {
-  manageCmd();
+} else if (['run', 'adopt', 'say', 'attach', 'managed', 'stop'].includes(cmd)) {
+  manageCmd().catch((e) => { console.error('conductor: ' + e.message); process.exit(1); });
 } else if (cmd === '' || cmd.startsWith('-')) {
   run('scan.js', args);
 } else if (['ls', 'list', 'table'].includes(cmd)) {
