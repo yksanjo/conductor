@@ -142,6 +142,23 @@ function key(label, k) {
   return r.code === 0 ? { ok: true, sent: k, label: name } : { ok: false, error: r.err };
 }
 
+// Bring a managed window's terminal to the front (macOS). Selects it as the active tmux
+// window for every client, then: if a Terminal is already attached to the session, just
+// activate Terminal (it now shows this window); otherwise open a new Terminal attached.
+function openTerminal(label) {
+  if (process.platform !== 'darwin') return { ok: false, error: 'open-in-terminal is macOS only (use: conductor attach ' + sanitize(label) + ')' };
+  const name = sanitize(label);
+  if (!windowAlive(name)) return { ok: false, error: 'no live managed window "' + name + '"' };
+  tmux(['select-window', '-t', target(name)]);
+  const clients = tmux(['list-clients', '-t', SESSION]);
+  const attached = clients.code === 0 && clients.out.trim().length > 0;
+  const args = attached
+    ? ['-e', 'tell application "Terminal" to activate']
+    : ['-e', 'tell application "Terminal" to activate', '-e', 'tell application "Terminal" to do script "tmux attach -t ' + SESSION + '"'];
+  const r = spawnSync('osascript', args, { encoding: 'utf8' });
+  return r.status === 0 ? { ok: true, label: name, attached } : { ok: false, error: (r.stderr || '').trim() || 'osascript failed' };
+}
+
 function attachCommand(label) {
   const name = sanitize(label);
   return `tmux attach -t ${SESSION} \\; select-window -t ${name}`;
@@ -195,4 +212,4 @@ function managedBySession() {
   return map;
 }
 
-module.exports = { run, adopt, say, sayAll, key, stop, listManaged, managedBySession, attachCommand, trustPromptShowing, answerTrust, sanitize, hasTmux, SESSION, REG_FILE };
+module.exports = { run, adopt, say, sayAll, key, stop, openTerminal, listManaged, managedBySession, attachCommand, trustPromptShowing, answerTrust, sanitize, hasTmux, SESSION, REG_FILE };

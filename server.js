@@ -122,6 +122,8 @@ const PAGE = /* html */ `<!doctype html>
   .cfoot { display:flex; align-items:center; gap:7px; }
   .chip { font-family:var(--mono); font-size:10.5px; color:var(--mut); background:rgba(255,255,255,.05); border:1px solid var(--line); border-radius:6px; padding:2px 7px; }
   .mbadge { font-size:9px; font-weight:750; letter-spacing:.7px; text-transform:uppercase; color:var(--accent); background:rgba(169,116,255,.12); border:1px solid rgba(169,116,255,.3); border-radius:999px; padding:2px 7px; }
+  .bopen { font:inherit; font-size:10.5px; font-weight:650; color:var(--open); background:rgba(70,216,198,.1); border:1px solid rgba(70,216,198,.32); border-radius:7px; padding:2px 8px; cursor:pointer; transition:.12s; }
+  .bopen:hover { background:rgba(70,216,198,.22); }
 
   .ctrl { margin-top:12px; padding-top:12px; border-top:1px dashed var(--line); }
   .qbtns { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:7px; }
@@ -276,7 +278,7 @@ function cardHTML(s) {
       </div>
       <div class="label">\${esc(s.title || s.label)}</div>
       <div class="task">\${esc(s.lastAction || s.intent || '—')}</div>
-      <div class="cfoot">\${s.place ? '<span class="chip">'+esc(s.place)+'</span>' : ''}\${s.gitBranch ? '<span class="chip">'+esc(s.gitBranch)+'</span>' : ''}\${s.managed ? '<span class="mbadge">managed</span>' : ''}</div>
+      <div class="cfoot">\${s.place ? '<span class="chip">'+esc(s.place)+'</span>' : ''}\${s.gitBranch ? '<span class="chip">'+esc(s.gitBranch)+'</span>' : ''}\${s.managed ? '<span class="mbadge">managed</span><button class="bopen" data-open="'+esc(s.mlabel)+'" title="Open this window in Terminal">↗ open</button>' : ''}</div>
       \${ctrlHTML(s)}
     </div>\`;
 }
@@ -313,6 +315,14 @@ async function replyAdopt(sessionId, text) {
     toast(j.ok ? '✓ “'+j.label+'” adopted — reply goes to the managed copy; close the original tab' : 'failed: '+(j.error||'?'));
     lastHash=''; load();
   } catch(e) { toast('failed'); }
+}
+async function openTerm(label) {
+  toast('opening “'+label+'” in Terminal…');
+  try {
+    const r = await fetch('/api/open', { method:'POST', headers:{'content-type':'application/json','x-conductor':'1'}, body:JSON.stringify({label}) });
+    const j = await r.json();
+    toast(j.ok ? (j.attached ? '↗ brought Terminal to front · '+label : '↗ opened “'+label+'” in a new Terminal') : 'open failed: '+(j.error||'?'));
+  } catch(e) { toast('open failed'); }
 }
 // build broadcast quick-buttons once
 document.getElementById('bbtns').innerHTML = QUICK.map(q => '<button class="qb" data-all="'+esc(q[1])+'">'+q[0]+'</button>').join('');
@@ -400,6 +410,8 @@ function dispatchReply(el, text) {
   else if (el.dataset.session != null) replyAdopt(el.dataset.session, text); // plain → adopt + send
 }
 boardEl.addEventListener('click', e=>{
+  const ob = e.target.closest('.bopen');
+  if (ob) { e.stopPropagation(); openTerm(ob.dataset.open); return; }
   const qb = e.target.closest('.qb,.qsend');
   if (qb) {
     e.stopPropagation();
@@ -506,6 +518,12 @@ async function handle(req, res) {
       const r = p.key ? manage.key(p.label, p.key) : manage.say(p.label, p.text || '');
       sendJSON(res, r.ok ? 200 : 400, r);
     });
+    return;
+  }
+
+  // Bring a managed window's terminal to the front (macOS).
+  if (url.pathname === '/api/open' && req.method === 'POST') {
+    readBody(req, res, (p) => { const r = manage.openTerminal(p.label); sendJSON(res, r.ok ? 200 : 400, r); });
     return;
   }
 
