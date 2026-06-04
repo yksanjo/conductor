@@ -46,6 +46,10 @@ Every Claude Code window logs a live `.jsonl` transcript under
    pulling each session's `ai-title`, latest prompt, recent tool calls, and last action.
 4. Reports one row per window.
 
+## 🗺 The whole thing on one page
+
+![Conductor architecture — your windows write transcripts and run as processes; the zero-dep engine reads them; three surfaces (CLI, web cockpit, MCP); a tmux control plane for windows you launch or adopt](docs/spec.png)
+
 ## Install
 
 ```bash
