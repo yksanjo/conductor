@@ -50,7 +50,7 @@ function windowAlive(label) {
 }
 
 // Launch a new managed window running `claude` in tmux, capture its sessionId.
-function run(label, claudeArgs, cwd) {
+function run(label, claudeArgs, cwd, opts = {}) {
   if (!hasTmux()) return { ok: false, error: 'tmux is not installed (brew install tmux).' };
   const name = sanitize(label);
   cwd = cwd || process.cwd();
@@ -72,13 +72,17 @@ function run(label, claudeArgs, cwd) {
   tmux(['send-keys', '-t', target(name), '-l', '--', cmd]);
   tmux(['send-keys', '-t', target(name), 'Enter']);
 
-  // Capture the new transcript sessionId (claude writes a fresh .jsonl on start).
+  // Capture the new transcript sessionId (claude writes a fresh .jsonl on start). Skipped
+  // when opts.capture === false (e.g. the web server, which must not block) — listManaged()
+  // lazily resolves the sessionId later.
   let sessionId = null;
-  for (let i = 0; i < 16; i++) {                 // poll up to ~8s
-    const now = jsonlSet(cwd);
-    const fresh = [...now].filter((f) => !before.has(f));
-    if (fresh.length) { sessionId = fresh[0].replace(/\.jsonl$/, ''); break; }
-    spawnSync('sleep', ['0.5']);
+  if (opts.capture !== false) {
+    for (let i = 0; i < 16; i++) {               // poll up to ~8s
+      const now = jsonlSet(cwd);
+      const fresh = [...now].filter((f) => !before.has(f));
+      if (fresh.length) { sessionId = fresh[0].replace(/\.jsonl$/, ''); break; }
+      spawnSync('sleep', ['0.5']);
+    }
   }
 
   const reg = loadReg();

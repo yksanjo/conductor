@@ -13,21 +13,22 @@ Open a fresh window and ask Conductor to sort them out:
 
 WORKING NOW ───────────────────────────────────────────────────────────
 ┌─ 1d177c35 ──────────────────────────────────────────────────────────┐
-│ ● SOAG · Grid                                       conv-fix · 4s ago │
-│ Build SOAG Agent trading grid with character art                     │
+│ ● Build SOAG Agent trading grid with character art  conv-fix · 4s ago │
+│ SOAG · Grid                                                          │
 │ › Read: src/characters.js                                            │
 └──────────────────────────────────────────────────────────────────────┘
 
 OPEN ──────────────────────────────────────────────────────────────────
 ┌─ ede6faa0 ──────────────────────────────────────────────────────────┐
-│ ● Good Rooms                                            main · 17h ago │
-│ Tech week NYC schedule planning                                      │
+│ ● Tech week NYC schedule planning                      main · 17h ago │
+│ Good Rooms                                                           │
 │ › Done. Here's what I built…                                         │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Each window is a box, grouped into **Working now / Open / Recently active / Idle**.
-Open the visual version with `conductor up`.
+Each window is a box that **leads with what it's actually about** (the session's own
+summary), grouped into **Working now / Open / Recently active / Idle**. Open the visual
+version with `conductor up`.
 
 No new infrastructure. Conductor reads the transcript that every Claude Code session
 **already writes** to `~/.claude/projects/`. It's **read-only** — it never touches,

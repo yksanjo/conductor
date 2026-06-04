@@ -52,17 +52,17 @@ function box(W, r) {
   const tab = `─ ${r.shortId} `;
   lines.push(C.d + '┌' + tab + '─'.repeat(Math.max(0, W - 2 - tab.length)) + '┐' + C.r);
 
-  // header row: ● <label> .................... <branch · age>
+  // header row: ● <what it's about> .................... <branch · age>
   const st = STATUS[r.status] || STATUS.idle;
   const right = (r.gitBranch ? r.gitBranch + ' · ' : '') + r.lastActiveRel;
   const leftW = Math.max(4, inner - right.length - 3);   // ● + two spaces = 3 cells
-  const label = fit(r.label, leftW);                     // already padded to leftW
-  const head = `${st.col}●${C.r} ${C.b}${label}${C.r} ${C.d}${right}${C.r}`;
+  const heading = fit(r.title || r.label, leftW);        // lead with the plain-language title
+  const head = `${st.col}●${C.r} ${C.b}${heading}${C.r} ${C.d}${right}${C.r}`;
   lines.push(`${C.d}│${C.r} ${head} ${C.d}│${C.r}`);
 
-  // task + last action
-  const task = r.task || r.intent || '—';
-  lines.push(`${C.d}│${C.r} ${C.dim}${fit(task, inner)}${C.r} ${C.d}│${C.r}`);
+  // context line (project, if a real project dir) + last action
+  const ctx = r.place || '—';
+  lines.push(`${C.d}│${C.r} ${C.dim}${fit(ctx, inner)}${C.r} ${C.d}│${C.r}`);
   lines.push(`${C.d}│${C.r} ${fit('› ' + plain(r.lastAction), inner)} ${C.d}│${C.r}`);
 
   lines.push(C.d + '└' + '─'.repeat(W - 2) + '┘' + C.r);

@@ -263,15 +263,20 @@ async function collectSessions(opts = {}) {
   });
   if (limit > 0) sessions = sessions.slice(0, limit);
 
+  const homeBase = path.basename(HOME);
   return sessions.map((s) => ({
     open: open.files.has(s.file),
     sessionId: s.sessionId,
     shortId: s.sessionId ? s.sessionId.slice(0, 8) : '????????',
-    label: labelFor(s.cwd),                 // the KEY — friendly project name
+    label: labelFor(s.cwd),                 // friendly project name (used for managed naming)
+    // "place" = project context shown as a chip, but ONLY when it's a real project dir
+    // (blank for home/scratch sessions, where the dir says nothing about the work).
+    place: s.cwd && path.basename(s.cwd) !== homeBase ? labelFor(s.cwd) : '',
     project: s.cwd ? path.basename(s.cwd) : '(unknown)',
     cwd: s.cwd,
     gitBranch: s.gitBranch || null,
-    task: s.aiTitle || s.slug || null,       // short essence of what it's doing
+    title: s.aiTitle || null,                // plain-language "what this window is about"
+    task: s.aiTitle || s.slug || null,       // (kept for back-compat)
     intent: s.lastPrompt || s.lastUserText || null,
     lastAction: lastAction(s),
     recent: s.recent.slice(-12),

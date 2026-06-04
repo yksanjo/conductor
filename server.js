@@ -10,6 +10,7 @@
 //   conductor-cockpit --no-open       don't auto-open the browser
 
 const http = require('http');
+const os = require('os');
 const { exec } = require('child_process');
 const { collectSessions } = require('./lib');
 const manage = require('./manage');
@@ -72,6 +73,9 @@ const PAGE = /* html */ `<!doctype html>
   .seg button { border:0; background:transparent; color:var(--mut); font:inherit; font-size:11.5px; font-weight:600; padding:5px 11px; border-radius:7px; cursor:pointer; transition:.12s; }
   .seg button:hover { color:var(--txt); }
   .seg button.on { background:rgba(255,255,255,.09); color:var(--txt); box-shadow:0 1px 2px rgba(0,0,0,.3); }
+  .newbtn { font:inherit; font-size:12px; font-weight:650; color:var(--txt); background:linear-gradient(92deg,var(--accent),var(--accent2)); border:0; border-radius:9px; padding:7px 13px; cursor:pointer; transition:.12s; }
+  .newbtn:hover { filter:brightness(1.1); }
+  .modal .qin { width:100%; }
 
   main { padding:14px 24px 64px; max-width:1500px; margin:0 auto; }
   .section-head { display:flex; align-items:center; gap:12px; margin:28px 2px 14px; }
@@ -176,6 +180,7 @@ const PAGE = /* html */ `<!doctype html>
     <button data-m="1440">1d</button>
     <button data-m="all">all</button>
   </div>
+  <button class="newbtn" id="newbtn">+ New window</button>
 </header>
 <main>
   <div class="bcast" id="bcast" style="display:none">
@@ -241,9 +246,9 @@ function cardHTML(s) {
         \${s.managed ? '<span class="mbadge">managed</span>' : ''}
         <span class="time">\${esc(s.lastActiveRel)}</span>
       </div>
-      <div class="label">\${esc(s.label)}</div>
-      <div class="task">\${esc(s.task || s.intent || '—')}</div>
-      <div class="cfoot">\${s.gitBranch ? '<span class="chip">'+esc(s.gitBranch)+'</span>' : ''}\${s.managed ? '' : '<button class="badopt" data-adopt="'+s.sessionId+'">⤵ control</button>'}</div>
+      <div class="label">\${esc(s.title || s.label)}</div>
+      <div class="task">\${esc(s.lastAction || s.intent || '—')}</div>
+      <div class="cfoot">\${s.place ? '<span class="chip">'+esc(s.place)+'</span>' : ''}\${s.gitBranch ? '<span class="chip">'+esc(s.gitBranch)+'</span>' : ''}\${s.managed ? '' : '<button class="badopt" data-adopt="'+s.sessionId+'">⤵ control</button>'}</div>
       \${s.managed ? ctrlHTML(s) : ''}
     </div>\`;
 }
@@ -280,6 +285,32 @@ async function adoptWin(sessionId) {
 }
 // build broadcast quick-buttons once
 document.getElementById('bbtns').innerHTML = QUICK.map(q => '<button class="qb" data-all="'+esc(q[1])+'">'+q[0]+'</button>').join('');
+
+function openLauncher() {
+  document.getElementById('modal').innerHTML = \`
+    <button class="close" onclick="closeModal()">×</button>
+    <h2>New managed window</h2>
+    <div class="sub">launches Claude in a tmux window you can drive from this dashboard</div>
+    <div class="kv"><div class="k">Name</div><input class="qin" id="newlabel" placeholder="e.g. soag, research, fix-bug"></div>
+    <div class="kv"><div class="k">Folder</div><input class="qin" id="newcwd" placeholder="~ (home) — or a path like ~/soag-grid"></div>
+    <div class="kv"><button class="qsend" style="padding:8px 18px" onclick="launchWin()">Launch ▸</button></div>
+    <div class="foot">opens in tmux · answer its trust prompt with a quick reply (1), then control it from the cards</div>\`;
+  document.getElementById('scrim').classList.add('show');
+  setTimeout(()=>{ const el=document.getElementById('newlabel'); if(el) el.focus(); }, 60);
+}
+async function launchWin() {
+  const label = (document.getElementById('newlabel').value||'').trim();
+  const cwd = (document.getElementById('newcwd').value||'').trim();
+  if (!label) { toast('give it a name'); return; }
+  toast('launching “'+label+'”…');
+  try {
+    const r = await fetch('/api/run', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({label, cwd}) });
+    const j = await r.json();
+    if (j.ok) { toast('✓ launched “'+j.label+'” — reply 1 to its trust prompt'); closeModal(); lastHash=''; load(); }
+    else toast('launch failed: '+(j.error||'?'));
+  } catch(e) { toast('launch failed'); }
+}
+document.getElementById('newbtn').addEventListener('click', openLauncher);
 
 function render() {
   const board = document.getElementById('board');
@@ -318,8 +349,8 @@ function renderModal(){
   ).join('') || '<div class="ev"><span class="what">no recent events</span></div>';
   document.getElementById('modal').innerHTML = \`
     <button class="close" onclick="closeModal()">×</button>
-    <h2>\${esc(s.label)}</h2>
-    <div class="sub">\${esc(s.cwd||'')}\${s.gitBranch?'  ·  '+esc(s.gitBranch):''}  ·  \${esc(s.lastActiveRel)}  ·  \${esc(s.status)}</div>
+    <h2>\${esc(s.title || s.label)}</h2>
+    <div class="sub">\${s.place?esc(s.place)+'  ·  ':''}\${esc(s.cwd||'')}\${s.gitBranch?'  ·  '+esc(s.gitBranch):''}  ·  \${esc(s.lastActiveRel)}  ·  \${esc(s.status)}</div>
     <div class="kv"><div class="k">Goal</div><div class="v">\${esc(s.intent||s.task||'—')}</div></div>
     <div class="kv"><div class="k">Doing now</div><div class="v">\${esc(s.lastAction||'—')}</div></div>
     <div class="kv"><div class="k">Recent activity</div><div class="timeline">\${evs}</div></div>
@@ -421,6 +452,19 @@ async function handle(req, res) {
         if (r.ok) sent++;
       }
       sendJSON(res, 200, { ok: true, sent, total: ws.length });
+    });
+    return;
+  }
+
+  // Launch a brand-new managed window (born in tmux, no fork needed).
+  if (url.pathname === '/api/run' && req.method === 'POST') {
+    readBody(req, (p) => {
+      const label = (p.label || '').trim();
+      if (!label) return sendJSON(res, 400, { ok: false, error: 'label required' });
+      let cwd = (p.cwd || '').trim();
+      cwd = cwd ? cwd.replace(/^~(?=$|\/)/, os.homedir()) : os.homedir();
+      const r = manage.run(label, [], cwd, { capture: false });   // non-blocking; lazy-resolve later
+      sendJSON(res, r.ok ? 200 : 400, r);
     });
     return;
   }
