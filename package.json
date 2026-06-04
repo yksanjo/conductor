@@ -1,6 +1,6 @@
 {
   "name": "conductor-cli",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "description": "Read-only situational awareness across your live Claude Code sessions. Open one window, see what every other window is doing.",
   "bin": {
     "conductor": "cli.js",
