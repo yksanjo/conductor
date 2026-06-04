@@ -209,16 +209,36 @@ const SECTIONS = [
   { k:'idle',   t:'Idle',            c:'#6a6a85' },
 ];
 
+function typingNow() {
+  const a = document.activeElement;
+  return a && a.classList && a.classList.contains('qin');
+}
 async function load() {
   const q = WINDOW==='all' ? 'all=1' : 'minutes='+WINDOW;
   try {
     const r = await fetch('/api/sessions?'+q);
     const j = await r.json();
-    const hash = WINDOW + '|' + JSON.stringify(j.sessions.map(s=>[s.sessionId,s.status,s.lastActiveRel,s.lastAction,s.label]));
     DATA = j.sessions;
-    if (hash !== lastHash) { lastHash = hash; render(); }   // flicker-free: only repaint on change
-    else if (openId) renderModal();
+    // Structure = which windows / status / managed. Time + last-action churn every few
+    // seconds but DON'T change structure, so we update those in place and never rebuild the
+    // DOM (which would wipe a reply you're typing). Only a real structural change rebuilds —
+    // and even then we defer while you're typing.
+    const structure = WINDOW + '|' + JSON.stringify(DATA.map(s=>[s.sessionId,s.status,s.managed]));
+    if (structure !== lastHash && !typingNow()) { lastHash = structure; render(); }
+    else updateInPlace();
   } catch(e) { /* keep last render */ }
+}
+
+function updateInPlace() {
+  document.getElementById('count').textContent = DATA.length ? DATA.length+' window'+(DATA.length>1?'s':'') : '';
+  document.getElementById('bcount').textContent = DATA.filter(s=>s.managed).length;
+  for (const s of DATA) {
+    const card = document.querySelector('.card[data-id="'+s.sessionId+'"]');
+    if (!card) continue;
+    const t = card.querySelector('.time'); if (t && t.textContent !== s.lastActiveRel) t.textContent = s.lastActiveRel;
+    const tk = card.querySelector('.task'); const v = s.lastAction || s.intent || '—';
+    if (tk && tk.textContent !== v) tk.textContent = v;
+  }
 }
 
 const QUICK = [
