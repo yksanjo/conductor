@@ -8,21 +8,26 @@ You've got 10 terminals running Claude Code. You lose track of what each one is 
 Open a fresh window and ask Conductor to sort them out:
 
 ```
-🎼 Conductor — 4 sessions touched in last 30 min (newest activity first)
+🎼 Conductor — 3 windows · last 1h
+   cockpit: conductor up   ·   control: conductor run <label> / conductor say <label> yes
 
-● 1d177c35  conductor @ conv-fix  · 2s ago
-    ▸ CLI communication with other CLOs
-    goal: lets do it all!
-    last: 🔧 Bash: cd ~/conductor && node test.js
+WORKING NOW ───────────────────────────────────────────────────────────
+┌─ 1d177c35 ──────────────────────────────────────────────────────────┐
+│ ● SOAG · Grid                                       conv-fix · 4s ago │
+│ Build SOAG Agent trading grid with character art                     │
+│ › Read: src/characters.js                                            │
+└──────────────────────────────────────────────────────────────────────┘
 
-● ede6faa0  agent-org @ conv-fix  · 17h ago
-    ▸ Tech week NYC schedule planning
-    last: 💬 Done. Here's what I built...
-
-● 5e6f0a17  survivors @ conv-fix  · 17h ago
-    ▸ Build breakout radar tool
-    last: 💬 dropped the 100k SOAG gate...
+OPEN ──────────────────────────────────────────────────────────────────
+┌─ ede6faa0 ──────────────────────────────────────────────────────────┐
+│ ● Good Rooms                                            main · 17h ago │
+│ Tech week NYC schedule planning                                      │
+│ › Done. Here's what I built…                                         │
+└──────────────────────────────────────────────────────────────────────┘
 ```
+
+Each window is a box, grouped into **Working now / Open / Recently active / Idle**.
+Open the visual version with `conductor up`.
 
 No new infrastructure. Conductor reads the transcript that every Claude Code session
 **already writes** to `~/.claude/projects/`. It's **read-only** — it never touches,
