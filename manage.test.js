@@ -56,7 +56,39 @@ if (!tmuxOk()) {
   ok('key() sends a named key', m.key(LBL, 'C-c').ok === true);
   ok('say to unknown window fails gracefully', m.say('no-such-window-xyz', 'hi').ok === false);
 
+  // --- run() launch + say into a run-created window (cmd:'cat' avoids spawning real claude;
+  //     cat keeps the pane alive and echoes whatever we send) ---
+  const RL = 'rtest' + process.pid;
+  const rr = m.run(RL, [], os.tmpdir(), { cmd: 'cat', capture: false });
+  ok('run() launches a managed window', rr.ok && rr.target === 'conductor:' + RL);
+  spawnSync('sleep', ['0.4']);
+  ok('run() registered it', m.listManaged().some((w) => w.label === RL));
+  const rmark = 'run_marker_' + process.pid;
+  m.say(RL, rmark);
+  spawnSync('sleep', ['0.4']);
+  const rpane = spawnSync('tmux', ['capture-pane', '-p', '-t', 'conductor:' + RL], { encoding: 'utf8' }).stdout || '';
+  ok('say into a run-created window lands', rpane.includes(rmark));
+
+  // --- sayAll broadcasts to every managed window (LBL + RL are both live) ---
+  const bmark = 'bcast_' + process.pid;
+  const ball = m.sayAll({ text: bmark });
+  ok('sayAll hits all managed (sent === total ≥ 2)', ball.ok && ball.total >= 2 && ball.sent === ball.total);
+  spawnSync('sleep', ['0.4']);
+  const rpane2 = spawnSync('tmux', ['capture-pane', '-p', '-t', 'conductor:' + RL], { encoding: 'utf8' }).stdout || '';
+  ok('sayAll reached the run window', rpane2.includes(bmark));
+
+  // --- adopt() launches `--resume <id> --fork-session` (cmd:'echo' lets us read the args) ---
+  const AL = 'atest' + process.pid;
+  m.adopt(AL, 'SID123', os.tmpdir(), { cmd: 'echo', capture: false });
+  spawnSync('sleep', ['0.5']);
+  const apane = spawnSync('tmux', ['capture-pane', '-p', '-t', 'conductor:' + AL], { encoding: 'utf8' }).stdout || '';
+  ok('adopt() forks via --resume <id> --fork-session', /--resume SID123 --fork-session/.test(apane));
+
+  // --- trustPromptShowing is false for a normal shell pane (no false positives) ---
+  ok('trustPromptShowing false on a plain pane', m.trustPromptShowing(RL) === false);
+
   // cleanup
+  m.stop(RL); m.stop(AL);
   m.stop(LBL);
   ok('stop() removes it from the registry', !m.listManaged().some((w) => w.label === LBL));
 }

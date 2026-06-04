@@ -67,19 +67,21 @@ function run(label, claudeArgs, cwd, opts = {}) {
     if (r.code !== 0) return { ok: false, error: 'tmux new-window failed: ' + r.err };
   }
 
-  // Start claude inside the pane (typed into the shell so it stays visible / re-runnable).
-  const cmd = ['claude', ...(claudeArgs || [])].join(' ');
+  // Start the program inside the pane (typed into the shell so it stays visible). opts.cmd
+  // defaults to "claude" — overridable for tests / launching other CLIs.
+  const cmd = [opts.cmd || 'claude', ...(claudeArgs || [])].join(' ');
   tmux(['send-keys', '-t', target(name), '-l', '--', cmd]);
   tmux(['send-keys', '-t', target(name), 'Enter']);
 
-  // Capture the new transcript sessionId (claude writes a fresh .jsonl on start). Skipped
-  // when opts.capture === false (e.g. the web server, which must not block) — listManaged()
-  // lazily resolves the sessionId later.
+  // Capture the new transcript sessionId (claude writes a fresh .jsonl on start) and
+  // auto-answer the "trust this folder?" prompt along the way. Skipped when
+  // opts.capture === false (e.g. the web server, which must not block) — the server
+  // schedules trust separately, and listManaged() lazily resolves the sessionId.
   let sessionId = null;
   if (opts.capture !== false) {
-    for (let i = 0; i < 16; i++) {               // poll up to ~8s
-      const now = jsonlSet(cwd);
-      const fresh = [...now].filter((f) => !before.has(f));
+    for (let i = 0; i < 20; i++) {               // poll up to ~10s
+      if (trustPromptShowing(name)) answerTrust(name);
+      const fresh = [...jsonlSet(cwd)].filter((f) => !before.has(f));
       if (fresh.length) { sessionId = fresh[0].replace(/\.jsonl$/, ''); break; }
       spawnSync('sleep', ['0.5']);
     }
@@ -95,9 +97,30 @@ function run(label, claudeArgs, cwd, opts = {}) {
 // (claude --resume <id> --fork-session). Forking avoids two live clients on one session id,
 // so the user's old tab can stay open until they close it. Returns run()'s result (the new,
 // forked sessionId is captured by polling, like a fresh launch).
-function adopt(label, sessionId, cwd) {
+function adopt(label, sessionId, cwd, opts) {
   if (!sessionId) return { ok: false, error: 'no sessionId to adopt' };
-  return run(label, ['--resume', sessionId, '--fork-session'], cwd);
+  return run(label, ['--resume', sessionId, '--fork-session'], cwd, opts);
+}
+
+// The "trust this folder?" prompt: detect it and accept the default (highlighted "Yes")
+// with Enter. Only sends Enter when the prompt is actually showing, so it can't fire a
+// stray keystroke into an already-trusted session.
+function trustPromptShowing(label) {
+  const r = tmux(['capture-pane', '-p', '-t', target(label)]);
+  return r.code === 0 && /trust this folder|Yes, I trust|safety check/i.test(r.out);
+}
+function answerTrust(label) { return key(label, 'Enter'); }
+
+// Broadcast one reply (or key) to every managed window at once.
+function sayAll(payload) {
+  payload = payload || {};
+  const ws = listManaged();
+  let sent = 0;
+  for (const w of ws) {
+    const r = payload.key ? key(w.label, payload.key) : say(w.label, payload.text || '');
+    if (r.ok) sent++;
+  }
+  return { ok: true, sent, total: ws.length };
 }
 
 // Send a short reply (literal text + Enter). Reply text is passed as an arg, never shelled.
@@ -172,4 +195,4 @@ function managedBySession() {
   return map;
 }
 
-module.exports = { run, adopt, say, key, stop, listManaged, managedBySession, attachCommand, sanitize, hasTmux, SESSION, REG_FILE };
+module.exports = { run, adopt, say, sayAll, key, stop, listManaged, managedBySession, attachCommand, trustPromptShowing, answerTrust, sanitize, hasTmux, SESSION, REG_FILE };

@@ -412,6 +412,13 @@ function sendJSON(res, code, obj) {
   res.writeHead(code, { 'content-type': 'application/json' });
   res.end(JSON.stringify(obj));
 }
+// Non-blocking: poke the new window a few times to accept its "trust this folder?" prompt
+// (only fires Enter when the prompt is actually showing — see manage.trustPromptShowing).
+function scheduleTrust(label) {
+  for (const ms of [1500, 3000, 5000, 7500]) {
+    setTimeout(() => { try { if (manage.trustPromptShowing(label)) manage.answerTrust(label); } catch { /* ignore */ } }, ms);
+  }
+}
 
 async function handle(req, res) {
   const url = new URL(req.url, 'http://localhost');
@@ -444,15 +451,7 @@ async function handle(req, res) {
 
   // Broadcast to every managed window at once.
   if (url.pathname === '/api/say-all' && req.method === 'POST') {
-    readBody(req, (p) => {
-      const ws = manage.listManaged();
-      let sent = 0;
-      for (const w of ws) {
-        const r = p.key ? manage.key(w.label, p.key) : manage.say(w.label, p.text || '');
-        if (r.ok) sent++;
-      }
-      sendJSON(res, 200, { ok: true, sent, total: ws.length });
-    });
+    readBody(req, (p) => sendJSON(res, 200, manage.sayAll(p)));
     return;
   }
 
@@ -464,6 +463,7 @@ async function handle(req, res) {
       let cwd = (p.cwd || '').trim();
       cwd = cwd ? cwd.replace(/^~(?=$|\/)/, os.homedir()) : os.homedir();
       const r = manage.run(label, [], cwd, { capture: false });   // non-blocking; lazy-resolve later
+      if (r.ok) scheduleTrust(r.label);                           // auto-answer trust prompt
       sendJSON(res, r.ok ? 200 : 400, r);
     });
     return;
@@ -477,7 +477,8 @@ async function handle(req, res) {
         const s = rows.find((r) => r.sessionId === p.session || r.shortId === p.session);
         if (!s) return sendJSON(res, 400, { ok: false, error: 'session not found' });
         const label = manage.sanitize(s.label) || s.shortId;
-        const r = manage.adopt(label, s.sessionId, s.cwd);
+        const r = manage.adopt(label, s.sessionId, s.cwd, { capture: false });
+        if (r.ok) scheduleTrust(r.label);
         sendJSON(res, r.ok ? 200 : 400, r);
       } catch (e) { sendJSON(res, 500, { ok: false, error: e.message }); }
     });
