@@ -135,9 +135,6 @@ const PAGE = /* html */ `<!doctype html>
   .bcast .blabel b { color:var(--accent); }
   .bcast .bbtns { display:flex; flex-wrap:wrap; gap:5px; }
   .bcast .qin { flex:1; min-width:160px; }
-  /* adopt ("control") button on read-only cards */
-  .badopt { font:inherit; font-size:10.5px; font-weight:650; color:var(--accent); background:rgba(169,116,255,.1); border:1px solid rgba(169,116,255,.3); border-radius:7px; padding:3px 9px; cursor:pointer; transition:.12s; }
-  .badopt:hover { background:rgba(169,116,255,.22); }
 
   .card.active { --c:var(--active); } .card.open { --c:var(--open); }
   .card.recent { --c:var(--recent); } .card.idle { --c:var(--idle); }
@@ -519,7 +516,7 @@ async function handle(req, res) {
     return;
   }
   if (url.pathname === '/' || url.pathname === '/index.html') {
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
     res.end(PAGE);
     return;
   }
