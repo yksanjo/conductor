@@ -27,6 +27,7 @@ ok('sanitize collapses + trims', m.sanitize('  a // b  ') === 'a-b');
 ok('sanitize falls back for empty', m.sanitize('!!!') === 'window');
 ok('attachCommand references tmux + session', /tmux attach -t conductor/.test(m.attachCommand('x')));
 ok('listManaged empty on fresh registry', m.listManaged().length === 0);
+ok('uniqueLabel returns the base label when nothing clashes', m.uniqueLabel('Home / scratch', 'abc123') === 'Home-scratch');
 
 if (!tmuxOk()) {
   console.log('  ⚠ tmux not found — skipping live send/capture tests');
@@ -83,6 +84,30 @@ if (!tmuxOk()) {
   spawnSync('sleep', ['0.5']);
   const apane = spawnSync('tmux', ['capture-pane', '-p', '-t', 'conductor:' + AL], { encoding: 'utf8' }).stdout || '';
   ok('adopt() forks via --resume <id> --fork-session', /--resume SID123 --fork-session/.test(apane));
+
+  // adopt() records the original session id so the clicked card flips to managed (the fork
+  // gets a fresh id). managedBySession() must map that adopted-from id back to the window.
+  ok('managedBySession maps the adopted-from session', m.managedBySession().SID123 && m.managedBySession().SID123.label === AL);
+  // a DIFFERENT session in the same label space must not collide onto AL's window
+  ok('uniqueLabel keeps the base for the same session', m.uniqueLabel(AL, 'SID123') === AL);
+  ok('uniqueLabel suffixes for a different session', m.uniqueLabel(AL, 'OTHERSID') === m.sanitize(AL + '-OTHERSID'));
+
+  // --- paneStage classifies the startup menus by what's on screen (drive a `cat` pane) ---
+  const SL = 'stest' + process.pid;
+  m.run(SL, [], os.tmpdir(), { cmd: 'cat', capture: false });
+  spawnSync('sleep', ['0.3']);
+  spawnSync('tmux', ['send-keys', '-t', 'conductor:' + SL, '-l', '--', 'Quick safety check: Is this a project you trust this folder']);
+  spawnSync('tmux', ['send-keys', '-t', 'conductor:' + SL, 'Enter']); spawnSync('sleep', ['0.3']);
+  ok('paneStage detects the trust prompt', m.paneStage(SL) === 'trust');
+  m.stop(SL);
+  // fresh pane for the resume picker (the trust text above mustn't linger on screen)
+  const SL2 = 'stest2' + process.pid;
+  m.run(SL2, [], os.tmpdir(), { cmd: 'cat', capture: false });
+  spawnSync('sleep', ['0.3']);
+  spawnSync('tmux', ['send-keys', '-t', 'conductor:' + SL2, '-l', '--', 'We recommend resuming from a summary. Resume from summary Resume full session as-is']);
+  spawnSync('tmux', ['send-keys', '-t', 'conductor:' + SL2, 'Enter']); spawnSync('sleep', ['0.3']);
+  ok('paneStage detects the resume picker', m.paneStage(SL2) === 'resume');
+  m.stop(SL2);
 
   // --- trustPromptShowing is false for a normal shell pane (no false positives) ---
   ok('trustPromptShowing false on a plain pane', m.trustPromptShowing(RL) === false);

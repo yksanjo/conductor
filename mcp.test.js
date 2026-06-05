@@ -69,7 +69,8 @@ function notify(method, params) { srv.stdin.write(JSON.stringify({ jsonrpc: '2.0
 
   const list = await rpc('tools/list', {});
   const names = list.result.tools.map((t) => t.name);
-  ok('tools/list returns the 3 tools', names.includes('list_sessions') && names.includes('summarize_session') && names.includes('whats_left'));
+  ok('tools/list returns the 3 read tools', names.includes('list_sessions') && names.includes('summarize_session') && names.includes('whats_left'));
+  ok('tools/list returns the 4 control/triage tools', ['pending_questions', 'reply_to_session', 'send_key', 'run_window'].every((n) => names.includes(n)));
   ok('tools have inputSchema', list.result.tools.every((t) => t.inputSchema && t.inputSchema.type === 'object'));
 
   const ls = await rpc('tools/call', { name: 'list_sessions', arguments: { minutes: 60 } });
@@ -87,6 +88,24 @@ function notify(method, params) { srv.stdin.write(JSON.stringify({ jsonrpc: '2.0
   const wl = await rpc('tools/call', { name: 'whats_left', arguments: {} });
   const wlData = JSON.parse(wl.result.content[0].text);
   ok('whats_left returns the window with goal + lastAction', wlData.windows.length === 1 && /build conductor C/.test(wlData.windows[0].goal));
+
+  // pending_questions: the fake session isn't an OPEN window (no live `claude` proc in the
+  // temp HOME), so it's correctly NOT "waiting on you" → empty, with the triage shape intact.
+  const pq = await rpc('tools/call', { name: 'pending_questions', arguments: {} });
+  const pqData = JSON.parse(pq.result.content[0].text);
+  ok('pending_questions returns the triage shape (0 here — no live process)', pqData.count === 0 && Array.isArray(pqData.windows) && /blocked on a human/.test(pqData.note));
+
+  // Control tools: exercise only the guard/error paths so the test never spawns a real window.
+  const rNo = await rpc('tools/call', { name: 'reply_to_session', arguments: { session: 'does-not-exist', text: 'hi' } });
+  const rNoData = JSON.parse(rNo.result.content[0].text);
+  ok('reply_to_session on an unknown session fails cleanly', rNoData.ok === false);
+
+  const kNo = await rpc('tools/call', { name: 'send_key', arguments: { session: 'does-not-exist', key: 'Escape' } });
+  const kNoData = JSON.parse(kNo.result.content[0].text);
+  ok('send_key on a non-managed window fails cleanly', kNoData.ok === false && /not a managed window|tmux/.test(kNoData.error));
+
+  const runMissing = await rpc('tools/call', { name: 'run_window', arguments: {} });
+  ok('run_window without a label returns isError (no spawn)', runMissing.result.isError === true);
 
   const bad = await rpc('tools/call', { name: 'nope', arguments: {} });
   ok('unknown tool returns isError (not a crash)', bad.result.isError === true);

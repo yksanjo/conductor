@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.0
+
+The MCP server gains a **control surface** so an MCP-aware orchestrator can drive windows
+end-to-end, not just watch them — the same tmux channel the web cockpit already uses.
+
+- New MCP tool `pending_questions` — returns ONLY the windows blocked waiting on a human
+  (Claude spoke last, then went quiet), with each window's question text. The triage feed.
+- New MCP control tools `reply_to_session` (reply; adopts a read-only window first),
+  `send_key` (Escape / C-c / Enter to a managed window), and `run_window` (launch a new
+  managed window with an optional first prompt).
+- No auto-approve policy: every reply is a deliberate tool call; irreversible steps stay a
+  human decision. The boot→ready drive loop (`deliverAdopted`) is now shared by the cockpit
+  and the MCP, so both adopt-and-drive windows identically.
+- Tests: MCP suite covers all 7 tools incl. the new triage shape and write-tool guard paths.
+
 ## 0.4.0
 
 Conductor is a read-only situational-awareness layer over your live Claude Code windows,

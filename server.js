@@ -2,8 +2,9 @@
 'use strict';
 
 // Conductor daemon — serves a live, glanceable web cockpit of your Claude Code sessions.
-// Read-only. Zero dependencies (node:http only). The page polls /api/sessions and
-// re-renders only when the data changes; click a card for full detail.
+// Zero dependencies (node:http only). The page polls /api/sessions and re-renders only when
+// the data changes; click a card to pop that session up as a clean CLI window, or use the
+// reply controls to steer it.
 //
 //   conductor-cockpit                 start on :7591, open browser, 60-min window
 //   conductor-cockpit --port 8080
@@ -207,7 +208,6 @@ const PAGE = /* html */ `<!doctype html>
 <script>
 let WINDOW = '60';
 let DATA = [];
-let openId = null;
 let lastHash = '';
 
 const esc = (s)=> (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -324,6 +324,22 @@ async function openTerm(label) {
     toast(j.ok ? (j.attached ? '↗ brought Terminal to front · '+label : '↗ opened “'+label+'” in a new Terminal') : 'open failed: '+(j.error||'?'));
   } catch(e) { toast('open failed'); }
 }
+// Click a card → bring its live CLI to the front. Managed windows already live in tmux, so we
+// just surface the terminal. A plain (unmanaged) window has no terminal handle we can focus, so
+// we adopt it (fork into tmux) — that gives you a real CLI for it — then open that. No more
+// read-only dialog: a click means "show me this session in a terminal".
+async function openCLI(id) {
+  const s = DATA.find(x=>x.sessionId===id);
+  if (!s) return;
+  if (s.managed) { openTerm(s.mlabel); return; }
+  toast('opening CLI — adopting this window…');
+  try {
+    const r = await fetch('/api/adopt', { method:'POST', headers:{'content-type':'application/json','x-conductor':'1'}, body:JSON.stringify({session:id}) });
+    const j = await r.json();
+    if (j.ok) { openTerm(j.label); lastHash=''; load(); }
+    else toast('open failed: '+(j.error||'?'));
+  } catch(e) { toast('open failed'); }
+}
 // build broadcast quick-buttons once
 document.getElementById('bbtns').innerHTML = QUICK.map(q => '<button class="qb" data-all="'+esc(q[1])+'">'+q[0]+'</button>').join('');
 
@@ -376,27 +392,9 @@ function render() {
     html += '<div class="grid">' + items.map(cardHTML).join('') + '</div>';
   }
   board.innerHTML = html;
-  if (openId) renderModal();
 }
 
-function openCard(id){ openId=id; renderModal(); document.getElementById('scrim').classList.add('show'); }
-function closeModal(){ openId=null; document.getElementById('scrim').classList.remove('show'); }
-
-function renderModal(){
-  const s = DATA.find(x=>x.sessionId===openId);
-  if(!s){ closeModal(); return; }
-  const evs = (s.recent||[]).slice().reverse().map(e=>
-    '<div class="ev"><span class="who">'+(e.role==='assistant'?'Claude':'you')+'</span><span class="what">'+esc(e.summary)+'</span></div>'
-  ).join('') || '<div class="ev"><span class="what">no recent events</span></div>';
-  document.getElementById('modal').innerHTML = \`
-    <button class="close" onclick="closeModal()">×</button>
-    <h2>\${esc(s.title || s.label)}</h2>
-    <div class="sub">\${s.place?esc(s.place)+'  ·  ':''}\${esc(s.cwd||'')}\${s.gitBranch?'  ·  '+esc(s.gitBranch):''}  ·  \${esc(s.lastActiveRel)}  ·  \${esc(s.status)}</div>
-    <div class="kv"><div class="k">Goal</div><div class="v">\${esc(s.intent||s.task||'—')}</div></div>
-    <div class="kv"><div class="k">Doing now</div><div class="v">\${esc(s.lastAction||'—')}</div></div>
-    <div class="kv"><div class="k">Recent activity</div><div class="timeline">\${evs}</div></div>
-    <div class="foot">session \${esc(s.shortId)} · read-only — this view never touches the window</div>\`;
-}
+function closeModal(){ document.getElementById('scrim').classList.remove('show'); }
 
 document.getElementById('seg').addEventListener('click', e=>{
   const b=e.target.closest('button'); if(!b) return;
@@ -421,7 +419,7 @@ boardEl.addEventListener('click', e=>{
   }
   if (e.target.closest('.ctrl')) return;       // clicks in the reply area shouldn't open the modal
   const card = e.target.closest('.card');
-  if (card) openCard(card.dataset.id);
+  if (card) openCLI(card.dataset.id);
 });
 // broadcast bar
 const bcastEl = document.getElementById('bcast');
@@ -480,13 +478,9 @@ function localOrigin(req) {
 function writeAllowed(req) {
   return localHost(req) && localOrigin(req) && req.headers['x-conductor'] === '1';
 }
-// Non-blocking: poke the new window a few times to accept its "trust this folder?" prompt
-// (only fires Enter when the prompt is actually showing — see manage.trustPromptShowing).
-function scheduleTrust(label) {
-  for (const ms of [1500, 3000, 5000, 7500]) {
-    setTimeout(() => { try { if (manage.trustPromptShowing(label)) manage.answerTrust(label); } catch { /* ignore */ } }, ms);
-  }
-}
+// Drive a freshly launched/adopted window from boot to "ready" and deliver the reply once the
+// prompt box is up. Shared with the MCP control tools — see manage.deliverAdopted.
+const deliverAdopted = manage.deliverAdopted;
 
 async function handle(req, res) {
   const url = new URL(req.url, 'http://localhost');
@@ -541,7 +535,7 @@ async function handle(req, res) {
       let cwd = (p.cwd || '').trim();
       cwd = cwd ? cwd.replace(/^~(?=$|\/)/, os.homedir()) : os.homedir();
       const r = manage.run(label, [], cwd, { capture: false });   // non-blocking; lazy-resolve later
-      if (r.ok) scheduleTrust(r.label);                           // auto-answer trust prompt
+      if (r.ok) deliverAdopted(r.label, '');                      // accept startup prompts → ready
       sendJSON(res, r.ok ? 200 : 400, r);
     });
     return;
@@ -560,11 +554,10 @@ async function handle(req, res) {
         const rows = await collectSessions({ minutes: 4320 });
         const s = rows.find((r) => r.sessionId === p.session || r.shortId === p.session);
         if (!s) return sendJSON(res, 400, { ok: false, error: 'session not found' });
-        const label = manage.sanitize(s.label) || s.shortId;
+        const label = manage.uniqueLabel(s.label || s.shortId, s.sessionId);
         const r = manage.adopt(label, s.sessionId, s.cwd, { capture: false });
         if (r.ok) {
-          scheduleTrust(label);               // accept trust prompt
-          if (text.trim()) setTimeout(() => { try { manage.say(label, text); } catch { /* ignore */ } }, 6500); // after it's ready
+          deliverAdopted(label, text);        // accept startup prompts, then deliver once ready
           return sendJSON(res, 200, { ok: true, label, adopted: true });
         }
         // adopt failed (commonly: a managed copy of this window already exists) → send to it
@@ -582,9 +575,9 @@ async function handle(req, res) {
         const rows = await collectSessions({ minutes: 4320 });
         const s = rows.find((r) => r.sessionId === p.session || r.shortId === p.session);
         if (!s) return sendJSON(res, 400, { ok: false, error: 'session not found' });
-        const label = manage.sanitize(s.label) || s.shortId;
+        const label = manage.uniqueLabel(s.label || s.shortId, s.sessionId);
         const r = manage.adopt(label, s.sessionId, s.cwd, { capture: false });
-        if (r.ok) scheduleTrust(r.label);
+        if (r.ok) deliverAdopted(r.label, '');
         sendJSON(res, r.ok ? 200 : 400, r);
       } catch (e) { sendJSON(res, 500, { ok: false, error: e.message }); }
     });
@@ -640,7 +633,7 @@ function main() {
   });
 
   server.listen(args.port, '127.0.0.1', () => {
-    console.log(`🎼 Conductor cockpit → ${url}  (read-only; Ctrl+C to stop)`);
+    console.log(`🎼 Conductor cockpit → ${url}  (Ctrl+C to stop)`);
     if (args.open) openBrowser(url);
   });
 }

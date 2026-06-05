@@ -190,6 +190,18 @@ function lastAction(s) {
   return s.recent.length ? s.recent[s.recent.length - 1].summary : '—';
 }
 
+// "Needs you": a LIVE window where Claude has spoken last and then gone quiet — i.e. it's
+// sitting at the prompt waiting for your reply (or blocked on a question). We key off a live
+// process so closed/idle transcripts (whose last line is also assistant text) don't nag, and
+// require a few seconds of quiet so we don't flag a response that's still streaming. The last
+// event being a tool_use/thinking/user means Claude is still working → not waiting.
+function waitingForYou(s, isOpen) {
+  if (!isOpen || !s.recent.length) return false;
+  const last = s.recent[s.recent.length - 1];
+  const quietSec = (Date.now() - s.lastActivityTs) / 1000;
+  return last.role === 'assistant' && last.kind === 'text' && quietSec >= 15;
+}
+
 // status: how alive is this window.
 //   active = open process AND wrote in last 5 min (working right now)
 //   open   = a live `claude` process exists for it, but it's been quiet
@@ -278,6 +290,7 @@ async function collectSessions(opts = {}) {
   const homeBase = path.basename(HOME);
   return sessions.map((s) => ({
     open: open.files.has(s.file),
+    waiting: waitingForYou(s, open.files.has(s.file)),
     sessionId: s.sessionId,
     shortId: s.sessionId ? s.sessionId.slice(0, 8) : '????????',
     label: labelFor(s.cwd),                 // friendly project name (used for managed naming)

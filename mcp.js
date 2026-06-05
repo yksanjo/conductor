@@ -3,18 +3,64 @@
 
 // Conductor MCP server — exposes your live Claude Code sessions as MCP tools so ANY
 // MCP-aware agent (Claude Code, Claude Desktop, etc.) can ask "what are my windows doing?"
-// natively. Read-only. Zero dependencies. Speaks MCP over stdio (newline-delimited
-// JSON-RPC 2.0).
+// AND drive them natively. Zero dependencies. Speaks MCP over stdio (newline-delimited
+// JSON-RPC 2.0). The control tools route through manage.js (tmux send-keys) — the same
+// channel the web cockpit uses — so an orchestrator agent can review and continue windows
+// end-to-end. There is NO auto-approve policy here: each reply is an explicit tool call the
+// orchestrator (and, through it, you) decide to make. Irreversible steps stay your call.
 //
-// Tools:
-//   list_sessions     — one line per live window: label, status, task, branch, age
-//   summarize_session — full detail for one window (by sessionId, shortId, or label)
-//   whats_left        — goal + last action per window, for the agent to triage next steps
+// Read tools:
+//   list_sessions      — one line per live window: label, status, task, branch, age
+//   summarize_session  — full detail for one window (by sessionId, shortId, or label)
+//   whats_left         — goal + last action per window, for the agent to triage next steps
+//   pending_questions  — ONLY the windows blocked waiting on a human, with the question text
+// Control tools (write — drive a window via tmux):
+//   reply_to_session   — send a reply to a window (adopts an unmanaged window first)
+//   send_key           — send a key (Escape / C-c / Enter) to a managed window
+//   run_window         — launch a new managed window, optionally with a first prompt
 
 const { collectSessions } = require('./lib');
+const manage = require('./manage');
 
 const PROTOCOL_VERSION = '2024-11-05';
-const SERVER_INFO = { name: 'conductor', version: '0.4.0' };
+const SERVER_INFO = { name: 'conductor', version: '0.5.0' };
+
+// Find one session row by sessionId, 8-char shortId, or friendly label (case-insensitive).
+async function findSession(ref, minutes = 4320) {
+  const key = String(ref || '').toLowerCase();
+  const rows = await collectSessions({ minutes, all: false });
+  return rows.find((r) =>
+    r.sessionId.toLowerCase() === key ||
+    r.shortId.toLowerCase() === key ||
+    (r.label || '').toLowerCase() === key ||
+    (r.mlabel || '').toLowerCase() === key);
+}
+
+// Deliver a reply to a window: if it's already managed, send straight to its tmux window;
+// otherwise adopt it (fork into tmux) and drive it from boot to ready, then deliver. Mirrors
+// the cockpit's /api/adopt-say so the MCP and the UI behave identically.
+async function replyToSession(ref, text) {
+  if (!manage.hasTmux()) return { ok: false, error: 'tmux is not installed (brew install tmux).' };
+  const managedBySession = manage.managedBySession();
+  const s = await findSession(ref);
+  // Already managed (by sessionId, adoptedFrom, or label)?
+  const existing = (s && managedBySession[s.sessionId])
+    || manage.listManaged().find((w) => w.label === manage.sanitize(ref));
+  if (existing) {
+    const r = manage.say(existing.label, text);
+    return r.ok ? { ok: true, label: existing.label, adopted: false } : r;
+  }
+  if (!s) return { ok: false, error: `no session matched "${ref}" — try list_sessions or widen the time window.` };
+  const label = manage.uniqueLabel(s.label || s.shortId, s.sessionId);
+  const r = manage.adopt(label, s.sessionId, s.cwd, { capture: false });
+  if (r.ok) {
+    manage.deliverAdopted(label, text);   // accept trust/resume prompts, then deliver once ready
+    return { ok: true, label, adopted: true, note: 'adopted into tmux; the reply lands once the fork is ready (~a few s).' };
+  }
+  // adopt failed (usually a managed copy already exists) → try sending to that label
+  const sr = manage.say(label, text);
+  return sr.ok ? { ok: true, label, adopted: false } : { ok: false, error: r.error || sr.error };
+}
 
 const TOOLS = [
   {
@@ -48,6 +94,53 @@ const TOOLS = [
       properties: {
         minutes: { type: 'number', description: 'Only sessions touched in the last N minutes (default 60).' },
       },
+    },
+  },
+  {
+    name: 'pending_questions',
+    description: 'List ONLY the live windows that are blocked waiting on a human — Claude spoke last and went quiet at the prompt. Returns the question text (its last message) plus label/branch/cwd so an orchestrator can decide what to answer. This is the triage feed for end-to-end driving: a window NOT here is busy working or done. Read-only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        minutes: { type: 'number', description: 'Only sessions touched in the last N minutes (default 60).' },
+      },
+    },
+  },
+  {
+    name: 'reply_to_session',
+    description: 'Send a reply to one window, advancing it. If the window is already managed (running in conductor\'s tmux) the text is delivered immediately; if it is a plain read-only window it is first adopted (forked into tmux) and the reply lands once the fork is ready. WRITE action — this makes a live agent act. Use after reading the window (summarize_session / pending_questions). Do NOT use to approve irreversible steps (deploy, send, delete, spend) without the human\'s explicit say-so.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session: { type: 'string', description: 'sessionId, 8-char shortId, or friendly label of the window to reply to.' },
+        text: { type: 'string', description: 'The reply text to send (e.g. "continue", "yes", or a full instruction).' },
+      },
+      required: ['session', 'text'],
+    },
+  },
+  {
+    name: 'send_key',
+    description: 'Send a single named key to a MANAGED window — e.g. "Escape" to dismiss a menu, "C-c" to interrupt, "Enter" to confirm. Only works on windows already running in conductor\'s tmux (adopt first via reply_to_session if needed). WRITE action.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session: { type: 'string', description: 'sessionId, shortId, or managed label of the window.' },
+        key: { type: 'string', description: 'tmux key name: Escape, Enter, C-c, Up, Down, etc.' },
+      },
+      required: ['session', 'key'],
+    },
+  },
+  {
+    name: 'run_window',
+    description: 'Launch a NEW managed Claude window in conductor\'s tmux, optionally with a first prompt to start its task. WRITE action — spawns a real agent session. Returns the label you can then drive with reply_to_session / send_key.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        label: { type: 'string', description: 'Short name for the window (a-z, 0-9, -, _).' },
+        cwd: { type: 'string', description: 'Working directory to start in (default: home). "~" is expanded.' },
+        prompt: { type: 'string', description: 'Optional first instruction to send once the window is ready.' },
+      },
+      required: ['label'],
     },
   },
 ];
@@ -94,6 +187,53 @@ async function callTool(name, args) {
         goal: s.intent || s.task, lastAction: s.lastAction,
       })),
     });
+  }
+  if (name === 'pending_questions') {
+    const rows = await collectSessions({ minutes: args.minutes || 60, all: false });
+    const mgd = manage.managedBySession();
+    const waiting = rows.filter((s) => s.waiting);
+    // The "question" is the last assistant text — the thing it's waiting on you for.
+    const lastText = (s) => {
+      for (let i = s.recent.length - 1; i >= 0; i--) {
+        const r = s.recent[i];
+        if (r.role === 'assistant' && r.kind === 'text') return r.summary;
+      }
+      return s.lastAction;
+    };
+    return textResult({
+      note: 'Each window here has Claude speaking last then going quiet — it is blocked on a human. Reply with reply_to_session. Approve irreversible steps only with the human\'s explicit OK.',
+      count: waiting.length,
+      windows: waiting.map((s) => ({
+        label: s.label, sessionId: s.sessionId, shortId: s.shortId,
+        managed: !!mgd[s.sessionId], branch: s.gitBranch, cwd: s.cwd,
+        waitingFor: lastText(s), lastActive: s.lastActiveRel,
+      })),
+    });
+  }
+  if (name === 'reply_to_session') {
+    if (!args.session) throw new Error('session is required');
+    const r = await replyToSession(args.session, args.text || '');
+    return textResult(r);
+  }
+  if (name === 'send_key') {
+    if (!args.session || !args.key) throw new Error('session and key are required');
+    const managedBySession = manage.managedBySession();
+    const s = await findSession(args.session);
+    const w = (s && managedBySession[s.sessionId])
+      || manage.listManaged().find((x) => x.label === manage.sanitize(args.session));
+    if (!w) return textResult({ ok: false, error: `"${args.session}" is not a managed window — reply_to_session adopts it first, then send_key works.` });
+    return textResult(manage.key(w.label, args.key));
+  }
+  if (name === 'run_window') {
+    if (!args.label) throw new Error('label is required');
+    if (!manage.hasTmux()) return textResult({ ok: false, error: 'tmux is not installed (brew install tmux).' });
+    let cwd = (args.cwd || '').trim();
+    cwd = cwd ? cwd.replace(/^~(?=$|\/)/, require('os').homedir()) : require('os').homedir();
+    const r = manage.run(args.label, [], cwd, { capture: false });
+    if (r.ok) manage.deliverAdopted(r.label, args.prompt || '');   // accept startup prompts; deliver first prompt if any
+    return textResult(r.ok
+      ? { ok: true, label: r.label, cwd, prompt: args.prompt || null, note: 'launched; drive it with reply_to_session / send_key.' }
+      : r);
   }
   throw new Error(`unknown tool: ${name}`);
 }

@@ -126,7 +126,19 @@ runs the scanner and renders a *doing-now / done / what's-left* summary per wind
 ### As an MCP server (use it inside any agent)
 
 Conductor speaks the Model Context Protocol over stdio, so any MCP-aware agent can call
-it natively. Three tools: `list_sessions`, `summarize_session`, `whats_left`.
+it natively — to **watch** its windows and to **drive** them.
+
+Read tools: `list_sessions`, `summarize_session`, `whats_left`, and `pending_questions`
+(only the windows blocked waiting on a human, with the question text — the triage feed).
+
+Control tools (write, via the same tmux channel as the cockpit): `reply_to_session`
+(reply to a window, adopting a read-only one first), `send_key` (Escape / C-c / Enter to a
+managed window), and `run_window` (launch a new managed window with an optional first prompt).
+
+This is what lets an orchestrator agent run windows end-to-end: poll `pending_questions`,
+read each with `summarize_session`, and `reply_to_session` to continue them. There is **no
+auto-approve policy** baked in — each reply is a deliberate tool call, and irreversible steps
+(deploy, send, delete, spend) stay a human decision.
 
 Add it to Claude Code (user scope = available everywhere):
 
