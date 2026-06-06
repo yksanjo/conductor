@@ -12,18 +12,29 @@
 // Read tools:
 //   list_sessions      — one line per live window: label, status, task, branch, age
 //   summarize_session  — full detail for one window (by sessionId, shortId, or label)
-//   whats_left         — goal + last action per window, for the agent to triage next steps
+//   whats_left         — goal + last action per unit, for the agent to triage next steps
 //   pending_questions  — ONLY the windows blocked waiting on a human, with the question text
+//   risk_snapshot      — fleet-wide PnL + drawdowns + wedged units (adapter:"fleet")
+// The read tools take an optional `adapter` ("claude-code" default, or "fleet").
 // Control tools (write — drive a window via tmux):
 //   reply_to_session   — send a reply to a window (adopts an unmanaged window first)
 //   send_key           — send a key (Escape / C-c / Enter) to a managed window
 //   run_window         — launch a new managed window, optionally with a first prompt
 
 const { collectSessions } = require('./lib');
+const engine = require('./engine');
 const manage = require('./manage');
+const pkg = require('./package.json');
 
 const PROTOCOL_VERSION = '2024-11-05';
-const SERVER_INFO = { name: 'conductor', version: '0.5.0' };
+const SERVER_INFO = { name: 'conductor', version: pkg.version };   // kept in sync with package.json
+
+// Collect rows for any adapter. claude-code keeps its exact legacy path (and the tmux control
+// tools); other adapters (e.g. fleet) route through the generic engine.
+async function collectFor(adapterName, opts) {
+  if (!adapterName || adapterName === 'claude-code') return collectSessions(opts);
+  return engine.collect(engine.loadAdapter(adapterName), opts);
+}
 
 // Find one session row by sessionId, 8-char shortId, or friendly label (case-insensitive).
 async function findSession(ref, minutes = 4320) {
@@ -65,22 +76,24 @@ async function replyToSession(ref, text) {
 const TOOLS = [
   {
     name: 'list_sessions',
-    description: 'List the user\'s live Claude Code sessions (windows). Returns one entry per session with a friendly project label, status (active/recent/idle), what it\'s working on, git branch, and how long since real activity. Read-only.',
+    description: 'List the user\'s live units (Claude Code windows by default; trading bots with adapter:"fleet"). Returns one entry per unit with a friendly label, status, what it\'s working on, and how long since real activity. Read-only.',
     inputSchema: {
       type: 'object',
       properties: {
-        minutes: { type: 'number', description: 'Only sessions touched in the last N minutes (default 60).' },
-        all: { type: 'boolean', description: 'Ignore the time filter and list every session.' },
+        adapter: { type: 'string', description: 'Which fleet to read: "claude-code" (default) or "fleet".' },
+        minutes: { type: 'number', description: 'Only units touched in the last N minutes (default 60).' },
+        all: { type: 'boolean', description: 'Ignore the time filter and list every unit.' },
       },
     },
   },
   {
     name: 'summarize_session',
-    description: 'Full detail for ONE session: its goal, what it is doing now, and a recent event timeline. Identify it by sessionId, the 8-char shortId, or its friendly label (case-insensitive).',
+    description: 'Full detail for ONE unit: its goal, what it is doing now, and a recent event timeline. Identify it by id, the short id, or its friendly label (case-insensitive).',
     inputSchema: {
       type: 'object',
       properties: {
-        session: { type: 'string', description: 'sessionId, shortId, or friendly label of the window.' },
+        session: { type: 'string', description: 'id, shortId, or friendly label of the unit.' },
+        adapter: { type: 'string', description: 'Which fleet to read: "claude-code" (default) or "fleet".' },
         minutes: { type: 'number', description: 'Search window in minutes (default 1440).' },
       },
       required: ['session'],
@@ -88,11 +101,23 @@ const TOOLS = [
   },
   {
     name: 'whats_left',
-    description: 'For each live session, return its goal and last action so you can infer what each window still needs to do. "What\'s left" is inference from the transcript, not a confirmed todo list.',
+    description: 'For each live unit, return its goal and last action so you can infer what each one still needs to do. "What\'s left" is inference from the trail, not a confirmed todo list.',
     inputSchema: {
       type: 'object',
       properties: {
-        minutes: { type: 'number', description: 'Only sessions touched in the last N minutes (default 60).' },
+        adapter: { type: 'string', description: 'Which fleet to read: "claude-code" (default) or "fleet".' },
+        minutes: { type: 'number', description: 'Only units touched in the last N minutes (default 60).' },
+      },
+    },
+  },
+  {
+    name: 'risk_snapshot',
+    description: 'Fleet risk view: total session PnL, the worst drawdowns, and any WEDGED units (an order/signal stuck with no fill) across a trading-bot fleet. Defaults to adapter "fleet". The supervise-by-exception feed for a desk — read-only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        adapter: { type: 'string', description: 'Fleet adapter to read (default "fleet").' },
+        minutes: { type: 'number', description: 'Only bots active in the last N minutes (default 1440).' },
       },
     },
   },
@@ -153,7 +178,16 @@ function textResult(obj) {
 async function callTool(name, args) {
   args = args || {};
   if (name === 'list_sessions') {
-    const rows = await collectSessions({ minutes: args.minutes || 60, all: !!args.all });
+    const rows = await collectFor(args.adapter, { minutes: args.minutes || 60, all: !!args.all });
+    if (args.adapter && args.adapter !== 'claude-code') {
+      return textResult({
+        adapter: args.adapter, count: rows.length,
+        units: rows.map((s) => ({
+          id: s.id, shortId: s.shortId, label: s.label, title: s.title,
+          status: s.status, context: s.context, lastActive: s.lastActiveRel,
+        })),
+      });
+    }
     return textResult({
       count: rows.length,
       sessions: rows.map((s) => ({
@@ -165,27 +199,45 @@ async function callTool(name, args) {
   }
   if (name === 'summarize_session') {
     const key = String(args.session || '').toLowerCase();
-    const rows = await collectSessions({ minutes: args.minutes || 1440, all: false });
+    const rows = await collectFor(args.adapter, { minutes: args.minutes || 1440, all: false });
     const s = rows.find((r) =>
-      r.sessionId.toLowerCase() === key ||
-      r.shortId.toLowerCase() === key ||
+      String(r.id || r.sessionId || '').toLowerCase() === key ||
+      (r.shortId || '').toLowerCase() === key ||
       (r.label || '').toLowerCase() === key);
     if (!s) return textResult(`No live session matched "${args.session}". Try list_sessions first, or widen 'minutes'.`);
     return textResult({
-      label: s.label, sessionId: s.sessionId, cwd: s.cwd, branch: s.gitBranch,
-      status: s.status, lastActive: s.lastActiveRel,
-      goal: s.intent || s.task, doingNow: s.lastAction,
-      recent: s.recent.map((e) => `${e.actor === 'assistant' ? 'Claude' : 'you'}: ${e.summary}`),
+      label: s.label, sessionId: s.sessionId || s.id, cwd: s.cwd, branch: s.gitBranch,
+      context: s.context, status: s.status, lastActive: s.lastActiveRel,
+      goal: s.intent || s.task || s.title, doingNow: s.lastAction,
+      recent: (s.recent || []).map((e) => `${e.actor === 'assistant' ? 'Claude' : (e.actor || 'you')}: ${e.summary}`),
     });
   }
   if (name === 'whats_left') {
-    const rows = await collectSessions({ minutes: args.minutes || 60, all: false });
+    const rows = await collectFor(args.adapter, { minutes: args.minutes || 60, all: false });
     return textResult({
-      note: '"what\'s left" is inferred from each transcript, not a confirmed todo list.',
+      note: '"what\'s left" is inferred from each trail, not a confirmed todo list.',
       windows: rows.map((s) => ({
         label: s.label, status: s.status, lastActive: s.lastActiveRel,
-        goal: s.intent || s.task, lastAction: s.lastAction,
+        goal: s.intent || s.task || s.title, lastAction: s.lastAction,
       })),
+    });
+  }
+  if (name === 'risk_snapshot') {
+    const adapterName = args.adapter || 'fleet';
+    const rows = await collectFor(adapterName, { minutes: args.minutes || 1440, all: false });
+    const num = (n) => (typeof n === 'number' ? n : 0);
+    const totalPnl = rows.reduce((a, s) => a + num(s.sessionPnl), 0);
+    const wedged = rows.filter((s) => s.status === 'wedged' || (s.statusInputs && s.statusInputs.wedged));
+    const drawdowns = rows.filter((s) => num(s.drawdownPct) > 0)
+      .sort((a, b) => num(b.drawdownPct) - num(a.drawdownPct));
+    return textResult({
+      adapter: adapterName,
+      note: 'Supervise by exception: wedged units and the deepest drawdowns are where attention is owed.',
+      bots: rows.length,
+      totalSessionPnl: Math.round(totalPnl * 100) / 100,
+      wedged: wedged.map((s) => ({ bot: s.id, venue: s.venue, lastAction: s.lastAction, lastActive: s.lastActiveRel })),
+      worstDrawdowns: drawdowns.slice(0, 5).map((s) => ({ bot: s.id, drawdownPct: Math.round(num(s.drawdownPct) * 1000) / 10, pnl: s.sessionPnl, status: s.status })),
+      units: rows.map((s) => ({ bot: s.id, status: s.status, pnl: s.sessionPnl, position: s.position, venue: s.venue, lastActive: s.lastActiveRel })),
     });
   }
   if (name === 'pending_questions') {

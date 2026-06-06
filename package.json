@@ -1,7 +1,7 @@
 {
   "name": "conductor-cli",
-  "version": "0.5.0",
-  "description": "Read-only situational awareness across your live Claude Code sessions. Open one window, see what every other window is doing.",
+  "version": "0.6.0",
+  "description": "Situational awareness across a fleet of semi-autonomous workers. Pluggable adapters (Claude Code windows, trading bots, …) on one zero-dependency engine; read-only observation, opt-in control.",
   "bin": {
     "conductor": "cli.js",
     "conductor-cockpit": "server.js",
