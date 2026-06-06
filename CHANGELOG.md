@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **Close a window from the cockpit** — managed cards now carry an **✕ close** button next to
+  **↗ open**. It kills the window's tmux session (the same thing `conductor stop <label>` does).
+  Closing is irreversible (the live session and its state are lost), so it double-confirms in the
+  browser and the `/api/stop` endpoint requires a confirm token (the label) on top of the CSRF
+  guard — mirroring how `flatten` is gated. Only conductor-managed windows get the button; plain
+  windows run in your own terminal tabs and have no handle here, so they're closed from that
+  terminal (the manual now says so). Covered by `server.test.js`.
+
 ## 0.6.0
 
 Conductor's engine is now a **source-agnostic supervisory core** with a pluggable adapter

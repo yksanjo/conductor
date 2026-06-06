@@ -54,6 +54,23 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     ok('POST with X-Conductor + local origin → 200', good.status === 200);
     ok('  …and returns a sayAll result', /"sent"/.test(good.body));
 
+    // /api/stop is irreversible → rejects without a confirm token even when the CSRF guard passes
+    const stopNoTok = await req('POST', '/api/stop',
+      { 'content-type': 'application/json', 'x-conductor': '1', origin: 'http://localhost:' + PORT }, '{"label":"ghost"}');
+    ok('POST /api/stop without confirm token → 400', stopNoTok.status === 400);
+    ok('  …and explains a confirm token is required', /confirm token/.test(stopNoTok.body));
+
+    // with a matching confirm token it passes the gate and reaches manage.stop (no such window
+    // → ok:false, but the request was not rejected on the token)
+    const stopTok = await req('POST', '/api/stop',
+      { 'content-type': 'application/json', 'x-conductor': '1', origin: 'http://localhost:' + PORT }, '{"label":"ghost","confirm":"ghost"}');
+    ok('POST /api/stop with confirm token passes the gate (reaches manage.stop)', !/confirm token/.test(stopTok.body));
+
+    // missing label → 400
+    const stopNoLabel = await req('POST', '/api/stop',
+      { 'content-type': 'application/json', 'x-conductor': '1', origin: 'http://localhost:' + PORT }, '{}');
+    ok('POST /api/stop without label → 400', stopNoLabel.status === 400);
+
     // oversize body → 413
     const big = await req('POST', '/api/say-all',
       { 'content-type': 'application/json', 'x-conductor': '1' }, '{"text":"' + 'x'.repeat(9000) + '"}');

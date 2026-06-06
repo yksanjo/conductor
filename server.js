@@ -144,6 +144,10 @@ const PAGE = /* html */ `<!doctype html>
   .mbadge { font-size:9px; font-weight:750; letter-spacing:.7px; text-transform:uppercase; color:var(--accent); background:rgba(169,116,255,.12); border:1px solid rgba(169,116,255,.3); border-radius:999px; padding:2px 7px; }
   .bopen { font:inherit; font-size:10.5px; font-weight:650; color:var(--open); background:rgba(70,216,198,.1); border:1px solid rgba(70,216,198,.32); border-radius:7px; padding:2px 8px; cursor:pointer; transition:.12s; }
   .bopen:hover { background:rgba(70,216,198,.22); }
+  /* tiny ✕ at the card's top-middle — hidden until card hover so it stays unobtrusive */
+  .xclose { position:absolute; top:6px; left:50%; transform:translateX(-50%); z-index:3; width:18px; height:18px; padding:0; line-height:16px; text-align:center; font-size:11px; font-weight:700; color:var(--mut); background:rgba(255,255,255,.04); border:1px solid var(--line); border-radius:50%; cursor:pointer; opacity:0; transition:.12s; }
+  .card:hover .xclose { opacity:.55; }
+  .xclose:hover { opacity:1; color:#ff8a96; background:rgba(255,90,106,.18); border-color:#ff5a6a; }
 
   .ctrl { margin-top:12px; padding-top:12px; border-top:1px dashed var(--line); }
   .qbtns { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:7px; }
@@ -297,6 +301,7 @@ function cardHTML(s) {
 function claudeCard(s) {
   const sm = statusMeta(s.status);
   return \`<div class="card \${s.status}" data-id="\${s.sessionId}" style="--c:\${sm.color}">
+      \${s.managed ? '<button class="xclose" data-close="'+esc(s.mlabel)+'" title="Close this window (kills its tmux session — irreversible)">✕</button>' : ''}
       <div class="ctop">
         <span class="pill \${s.status}" style="--c:\${sm.color}"><i></i>\${statusLabel(s.status)}</span>
         \${s.managed ? '<span class="mbadge">managed</span>' : ''}
@@ -367,6 +372,20 @@ async function openTerm(label) {
     const j = await r.json();
     toast(j.ok ? (j.attached ? '↗ brought Terminal to front · '+label : '↗ opened “'+label+'” in a new Terminal') : 'open failed: '+(j.error||'?'));
   } catch(e) { toast('open failed'); }
+}
+// Close a managed window — kills its tmux session, so the live session's state is gone for
+// good. Double-confirm in the browser, then send the label as a confirm token (the endpoint
+// rejects without it). Only managed windows expose this button; plain windows live in your own
+// terminal tabs and must be closed there.
+async function closeWindow(label) {
+  if (!confirm('Close “'+label+'”?\\n\\nThis kills its tmux session — the live Claude session and its state are lost. This cannot be undone.')) return;
+  toast('closing “'+label+'”…');
+  try {
+    const r = await fetch('/api/stop', { method:'POST', headers:{'content-type':'application/json','x-conductor':'1'}, body:JSON.stringify({label, confirm:label}) });
+    const j = await r.json();
+    toast(j.ok ? '✕ closed “'+label+'”' : 'close failed: '+(j.error||'?'));
+    if (j.ok) { lastHash=''; load(); }
+  } catch(e) { toast('close failed'); }
 }
 // Click a card → bring its live CLI to the front. Managed windows already live in tmux, so we
 // just surface the terminal. A plain (unmanaged) window has no terminal handle we can focus, so
@@ -505,6 +524,8 @@ boardEl.addEventListener('click', e=>{
   if (fb) { e.stopPropagation(); fleetControl(fb.dataset.bot, fb.dataset.cmd); return; }
   const ob = e.target.closest('.bopen');
   if (ob) { e.stopPropagation(); openTerm(ob.dataset.open); return; }
+  const cb = e.target.closest('.xclose');
+  if (cb) { e.stopPropagation(); closeWindow(cb.dataset.close); return; }
   const qb = e.target.closest('.qb,.qsend');
   if (qb) {
     e.stopPropagation();
@@ -660,6 +681,21 @@ async function handle(req, res) {
   // Bring a managed window's terminal to the front (macOS).
   if (url.pathname === '/api/open' && req.method === 'POST') {
     readBody(req, res, (p) => { const r = manage.openTerminal(p.label); sendJSON(res, r.ok ? 200 : 400, r); });
+    return;
+  }
+
+  // Close a managed window: kill its tmux window. Irreversible (the live session's state is
+  // lost), so — like flatten — it requires a confirm token (confirm === the window label) on
+  // top of the CSRF guard; the UI also double-confirms. Only conductor-managed windows live in
+  // tmux and can be killed this way; plain windows running in the user's own terminal tabs have
+  // no handle here and must be closed from that terminal.
+  if (url.pathname === '/api/stop' && req.method === 'POST') {
+    readBody(req, res, (p) => {
+      if (!p.label) return sendJSON(res, 400, { ok: false, error: 'label required' });
+      if (p.confirm !== p.label) return sendJSON(res, 400, { ok: false, error: 'closing a window is irreversible — confirm token (the label) required' });
+      const r = manage.stop(p.label);
+      sendJSON(res, r.ok ? 200 : 400, r);
+    });
     return;
   }
 

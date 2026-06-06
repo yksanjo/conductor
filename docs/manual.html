@@ -58,6 +58,8 @@
 
     <div class="row"><div class="lbl">New window</div><div class="body"><b>+ New window</b> button (name + folder), or <code>conductor run &lt;name&gt;</code>. It launches in tmux and auto-accepts the trust prompt.</div></div>
 
+    <div class="row"><div class="lbl">Close window</div><div class="body"><b style="color:#ff8a96">✕ close</b> on a <b>managed</b> card kills its tmux session (or <code>conductor stop &lt;name&gt;</code>). <b style="color:#ff8a96">Irreversible</b> — the live session and its state are gone — so it double-confirms first. Plain windows have no <b>✕ close</b>: they run in your own terminal tabs, so close them there.</div></div>
+
     <div class="row"><div class="lbl">Adopt existing</div><div class="body">Reply on any plain window's card to pull it under control, or <code>conductor adopt &lt;id&gt;</code>. Then close the original tab.</div></div>
 
     <div class="row"><div class="lbl">Type a lot</div><div class="body"><code>conductor attach &lt;name&gt;</code> drops you into the window to type long commands directly.</div></div>
