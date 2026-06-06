@@ -158,6 +158,10 @@ Or add it by hand to a client config (e.g. Claude Desktop `claude_desktop_config
 
 Then in any session: *"use conductor to list my sessions"* / *"what's left across my windows?"*
 
+To run an agent that drives your windows end-to-end (triage → continue the safe stuff →
+stop and ask you for irreversible steps), paste the orchestrator prompt in
+[`docs/orchestrator-prompt.md`](docs/orchestrator-prompt.md) into a window that has this MCP.
+
 ## Control — reply to managed windows
 
 Conductor can also *steer* windows, not just watch them. Because a plain-terminal Claude
