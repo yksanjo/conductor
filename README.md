@@ -136,8 +136,10 @@ runs the scanner and renders a *doing-now / done / what's-left* summary per wind
 Conductor speaks the Model Context Protocol over stdio, so any MCP-aware agent can call
 it natively — to **watch** its windows and to **drive** them.
 
-Read tools: `list_sessions`, `summarize_session`, `whats_left`, and `pending_questions`
-(only the windows blocked waiting on a human, with the question text — the triage feed).
+Read tools: `list_sessions`, `summarize_session`, `whats_left`, `pending_questions`
+(only the windows blocked waiting on a human, with the question text — the triage feed), and
+`risk_snapshot` (fleet PnL / drawdown / wedged units, for the trading-bot adapter). The read
+tools take an optional `adapter` (`"claude-code"` default, or `"fleet"`).
 
 Control tools (write, via the same tmux channel as the cockpit): `reply_to_session`
 (reply to a window, adopting a read-only one first — ungated, for a human-authorized reply),
@@ -155,6 +157,8 @@ Continuing ordinary work is automatic; approving an irreversible action is alway
 decision. The bias is to stop when unsure: a false gate costs one manual reply, a false pass
 can ship a bad deploy or move real money. `reply_to_session` stays the raw, ungated channel
 for relaying a decision the human has already made.
+
+![auto_continue across a fleet — ordinary work auto-continues; a "spend 0.4 SOL?" window is GATED back to the human](docs/conductor-gate-meme.png)
 
 Add it to Claude Code (user scope = available everywhere):
 

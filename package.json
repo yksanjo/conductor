@@ -13,6 +13,28 @@
     "mcp": "node mcp.js",
     "test": "node test.js && node policy.test.js && node fleet.test.js && node mcp.test.js && node manage.test.js && node server.test.js && node server.fleet.test.js"
   },
+  "files": [
+    "cli.js",
+    "scan.js",
+    "server.js",
+    "mcp.js",
+    "engine.js",
+    "lib.js",
+    "manage.js",
+    "policy.js",
+    "util.js",
+    "adapters/claude-code.js",
+    "adapters/fleet.js",
+    "skill/SKILL.md",
+    "docs/cockpit.png",
+    "docs/spec.png",
+    "docs/conductor-gate-meme.png",
+    "docs/orchestrator-prompt.md",
+    "docs/manual.html",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "keywords": [
     "claude-code",
     "cli",
