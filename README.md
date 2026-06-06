@@ -266,11 +266,15 @@ The **engine** (`engine.js`) is domain-blind: `loadAdapter(name)` resolves `adap
 |---|---|---|---|
 | `claude-code` (default) | `~/.claude/projects/**/*.jsonl` transcripts | a live `claude` process (`lsof`) | tmux send-keys (managed windows) |
 | `fleet` | `~/.fleet/bots/*/events.jsonl` event logs | newest heartbeat freshness | append commands to `control.jsonl` |
+| `mev-searcher` | `~/.fleet/searchers/*/events.jsonl` event logs | fresh heartbeat/opportunity (feed alive) | append commands to `control.jsonl` |
+| `validator-fleet` | the **chain** (`getVoteAccounts`/`getEpochInfo`/… per `rpcUrl`) | currently in the cluster vote set | opt-in, gated: control file or SSH exec |
 
 ```bash
-conductor                       # claude-code (default)
-conductor --adapter fleet       # the trading-bot fleet
-conductor up --adapter fleet    # the cockpit, fleet mode
+conductor                          # claude-code (default)
+conductor --adapter fleet          # the trading-bot fleet
+conductor --adapter mev-searcher   # the MEV / liquidation searcher fleet
+conductor --adapter validator-fleet # Solana validator ops (chain-side)
+conductor up --adapter fleet       # the cockpit, fleet mode
 ```
 
 ### The fleet adapter
@@ -299,6 +303,55 @@ conductor --adapter fleet
 
 The MCP server adds **`risk_snapshot`** (total PnL + worst drawdowns + wedged units) for an
 orchestrator agent driving the desk.
+
+### The mev-searcher adapter
+
+A sibling of the fleet adapter — same `~/.fleet` file-trail plumbing (factored into
+`adapters/_filetrail.js`), different domain. Each searcher appends to
+`~/.fleet/searchers/<bot>/events.jsonl` — `{ ts, type, ... }` where `type ∈ opportunity | bundle |
+submit | land | revert | pnl | gas | heartbeat | error` — and an optional `meta.json` gives
+`{ strategy, mandate, chain, venue }`. The adapter derives, over a recent window:
+
+- **`feed-dead`** (critical) — no heartbeat/opportunity in the window: disconnected from the
+  mempool / Geyser / orderflow;
+- **`wedged`** — submitting a flurry of bundles but ~nothing landing (losing every race);
+- **`bleeding`** — net flow negative after tips + gas;
+- **`racing`** (active) — landing bundles, positive flow; **`idle`** — connected, quiet market.
+
+Sectioned **FEED-DEAD → WEDGED → BLEEDING → RACING → IDLE**. Control appends `pause | resume |
+set-param | kill | unwind` to the searcher's `control.jsonl`. `unwind` (flatten seized collateral)
+is destructive → it carries an **adapter-layer confirm-token gate** on top of the cockpit guard, and
+**can never be broadcast** — `broadcast('pause')` is the desk-wide stop (gas spike / reorg / bad
+oracle), nothing destructive. Try it without a live chain:
+
+```bash
+node tools/fakesearcher.js arb-1 --scenario racing
+node tools/fakesearcher.js arb-2 --scenario wedged
+node tools/fakesearcher.js liq-1 --scenario bleeding
+conductor --adapter mev-searcher
+```
+
+### The validator-fleet adapter
+
+The novel one: **zero-instrumentation, chain-side observation**. It queries the *cluster*, not the
+box — one batched `getVoteAccounts` + `getEpochInfo` (+ optional `getBlockProduction` /
+`getClusterNodes` / `getBalance`) poll **per `rpcUrl`**, never per-node — so delinquency, catchup,
+skip-rate, balance, and version-drift are learned without touching the validator. Config at
+`<CONDUCTOR_DIR>/validators.json` (default `~/.conductor`): an array of
+`{ name, identityPubkey, votePubkey, cluster, rpcUrl, host?, control? }`.
+
+Signals: **`delinquent`** (critical) → **`behind`** (failing catchup) → **`degraded`** (skip rate) →
+**`low-balance`** (identity near the vote-fee floor) → **`version-drift`** (info) → **`healthy`**
+(voting, caught up, producing). Sectioned in that order.
+
+**Safety is non-negotiable here.** Control is **observe-only by default** — every capability
+(`restart | catchup | topup-identity | drain`) requires *both* a per-validator enable flag in
+`control` *and* a confirm token, and reaches the node via a control file it polls (default) or an
+arg-structured SSH exec. There is deliberately **no hot identity-swap**: swapping a validator
+identity while another copy may still be voting is the classic double-sign → **slashing / fund-loss**
+footgun, so it is left out entirely (a future version would need a hard interlock proving the old
+identity is provably stopped first). **`broadcast` is read-only** — at most a non-mutating `report`,
+never a desk-wide restart.
 
 ## Writing a new adapter
 
@@ -342,9 +395,31 @@ module.exports = {
 ```
 
 Notes: the engine groups records by `id` (freshest wins), applies `liveness`, computes `status`,
-sorts by your `statuses` order then recency, and runs `project` to produce the public row.
-`adapters/claude-code.js` and `adapters/fleet.js` are the two worked examples. Stream large trails
-(don't load them whole); bound any wide scan's concurrency. Zero runtime dependencies, Node ≥18.
+sorts by your `statuses` order then recency, and runs `project` to produce the public row. The four
+worked examples are `adapters/claude-code.js`, `adapters/fleet.js`, `adapters/mev-searcher.js`, and
+`adapters/validator-fleet.js`. The two file-trail adapters share `adapters/_filetrail.js` (discover
+glob, streamed jsonl parse, tail-read liveness, control-file append); the validator adapter is
+chain-side and doesn't use it. Stream large trails (don't load them whole); bound any wide scan's
+concurrency. Zero runtime dependencies, Node ≥18.
+
+### The four-ingredient fit test
+
+A domain is a Conductor adapter — rather than a rewrite — when it has all four. Naming them up front
+tells you what each hook becomes:
+
+1. **A fleet of units with intent.** Many semi-autonomous workers, each with a goal you can state in
+   one line (a bot's mandate, a validator's "stay in consensus"). → `parse().title` / `intent`.
+2. **A trail that already exists.** The unit emits its own activity — an append-only log, or a
+   third party (the chain) reports on it — so observation is read-only and zero-instrumentation. →
+   `discover()` + `parse()`.
+3. **A liveness signal.** Something that says "alive right now" distinct from "healthy": a heartbeat,
+   a fresh feed event, presence in a consensus set. → `liveness()`.
+4. **Supervise-by-exception status.** A small ordered vocabulary that floats the one unit needing
+   attention to the top (wedged, delinquent, feed-dead). → `statuses` + `status()`.
+
+Control is the optional fifth ingredient — opt-in, structured (never shell-interpolated), with a
+confirm token on anything destructive and **no destructive broadcast**. Candidates that fit the
+recipe: DER/VPP dispatch, data-pipeline / ETL runs, CI fleets, crawler swarms, GPU training jobs.
 
 ## License
 

@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- **Two more adapters — `mev-searcher` and `validator-fleet`.** Both supervise crypto-native fleets
+  by exception, extending the engine with no surface changes.
+  - **`adapters/mev-searcher.js`** — a MEV / liquidation searcher fleet reading
+    `~/.fleet/searchers/*/events.jsonl` (`opportunity|bundle|submit|land|revert|pnl|gas|heartbeat|
+    error`). Window signals **feed-dead** (disconnected) → **wedged** (losing every race) →
+    **bleeding** (net-negative after tips+gas) → **racing** / **idle**. Control appends `pause|
+    resume|set-param|kill|unwind`; `unwind` (flatten seized collateral) is destructive — confirm
+    token required and **never broadcastable**. `tools/fakesearcher.js` emits realistic trails.
+  - **`adapters/validator-fleet.js`** — Solana validator ops by **chain-side observation**: one
+    batched `getVoteAccounts`+`getEpochInfo` poll per `rpcUrl` (never per-node) drives **delinquent**
+    → **behind** → **degraded** (skip) → **low-balance** → **version-drift** → **healthy**. Control
+    is **observe-only by default**, gated by a per-capability flag *and* a confirm token; **no hot
+    identity-swap** (double-sign/slashing footgun, left out); `broadcast` is read-only (`report`).
+  - **`adapters/_filetrail.js`** — shared `~/.fleet` plumbing (discover glob, streamed jsonl parse,
+    tail-read liveness, structured control-file append with an opt-in destructive confirm gate);
+    `fleet.js` + `mev-searcher.js` both import it. Each adapter ships a no-mock test
+    (`adapters/mev-searcher.test.js`, `adapters/validator-fleet.test.js` — the latter against a stub
+    RPC server); `npm test` stays green across all adapters + the cockpit guard. README gains the
+    supported-adapters table and the four-ingredient fit test. *Cockpit wiring of the new control
+    planes is intentionally deferred pending review.*
+
 - **Close a window from the cockpit** — managed cards now carry an **✕ close** button next to
   **↗ open**. It kills the window's tmux session (the same thing `conductor stop <label>` does).
   Closing is irreversible (the live session and its state are lost), so it double-confirms in the

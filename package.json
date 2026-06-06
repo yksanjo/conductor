@@ -11,7 +11,7 @@
     "start": "node scan.js",
     "serve": "node server.js",
     "mcp": "node mcp.js",
-    "test": "node test.js && node fleet.test.js && node mcp.test.js && node manage.test.js && node server.test.js && node server.fleet.test.js"
+    "test": "node test.js && node fleet.test.js && node adapters/mev-searcher.test.js && node adapters/validator-fleet.test.js && node mcp.test.js && node manage.test.js && node server.test.js && node server.fleet.test.js"
   },
   "keywords": ["claude-code", "cli", "agents", "orchestration", "dashboard"],
   "license": "MIT",
