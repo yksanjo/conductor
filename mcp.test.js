@@ -70,7 +70,7 @@ function notify(method, params) { srv.stdin.write(JSON.stringify({ jsonrpc: '2.0
   const list = await rpc('tools/list', {});
   const names = list.result.tools.map((t) => t.name);
   ok('tools/list returns the 3 read tools', names.includes('list_sessions') && names.includes('summarize_session') && names.includes('whats_left'));
-  ok('tools/list returns the 4 control/triage tools', ['pending_questions', 'reply_to_session', 'send_key', 'run_window'].every((n) => names.includes(n)));
+  ok('tools/list returns the control/triage tools incl. auto_continue', ['pending_questions', 'reply_to_session', 'auto_continue', 'send_key', 'run_window'].every((n) => names.includes(n)));
   ok('tools have inputSchema', list.result.tools.every((t) => t.inputSchema && t.inputSchema.type === 'object'));
 
   const ls = await rpc('tools/call', { name: 'list_sessions', arguments: { minutes: 60 } });
@@ -94,6 +94,18 @@ function notify(method, params) { srv.stdin.write(JSON.stringify({ jsonrpc: '2.0
   const pq = await rpc('tools/call', { name: 'pending_questions', arguments: {} });
   const pqData = JSON.parse(pq.result.content[0].text);
   ok('pending_questions returns the triage shape (0 here — no live process)', pqData.count === 0 && Array.isArray(pqData.windows) && /blocked on a human/.test(pqData.note));
+  ok('pending_questions note explains the irreversible flag', /irreversible/.test(pqData.note));
+
+  // auto_continue: the gate must REFUSE an irreversible reply and NOT send it (so no spawn).
+  // The fake session is findable from the transcript; a reply that itself orders a deploy is gated.
+  const acGated = await rpc('tools/call', { name: 'auto_continue', arguments: { session: 'Gamma', text: 'deploy to prod now' } });
+  const acGatedData = JSON.parse(acGated.result.content[0].text);
+  ok('auto_continue GATES an irreversible reply (not sent)', acGatedData.gated === true && acGatedData.sent === false && acGatedData.categories.includes('deploy'));
+  ok('auto_continue returns the question + reason for the human', /irreversible/.test(acGatedData.reason) && acGatedData.proposedReply === 'deploy to prod now');
+
+  const acNo = await rpc('tools/call', { name: 'auto_continue', arguments: { session: 'does-not-exist' } });
+  const acNoData = JSON.parse(acNo.result.content[0].text);
+  ok('auto_continue on an unknown session fails cleanly (no spawn)', acNoData.ok === false && /no session matched/.test(acNoData.error));
 
   // Control tools: exercise only the guard/error paths so the test never spawns a real window.
   const rNo = await rpc('tools/call', { name: 'reply_to_session', arguments: { session: 'does-not-exist', text: 'hi' } });

@@ -1,7 +1,7 @@
 {
   "name": "conductor-cli",
-  "version": "0.6.0",
-  "description": "Situational awareness across a fleet of semi-autonomous workers. Pluggable adapters (Claude Code windows, trading bots, …) on one zero-dependency engine; read-only observation, opt-in control.",
+  "version": "0.7.0",
+  "description": "Situational awareness across a fleet of semi-autonomous workers. Pluggable adapters (Claude Code windows, trading bots, …) on one zero-dependency engine; read-only observation, opt-in control with an irreversibility gate.",
   "bin": {
     "conductor": "cli.js",
     "conductor-cockpit": "server.js",
@@ -11,9 +11,15 @@
     "start": "node scan.js",
     "serve": "node server.js",
     "mcp": "node mcp.js",
-    "test": "node test.js && node fleet.test.js && node mcp.test.js && node manage.test.js && node server.test.js && node server.fleet.test.js"
+    "test": "node test.js && node policy.test.js && node fleet.test.js && node mcp.test.js && node manage.test.js && node server.test.js && node server.fleet.test.js"
   },
-  "keywords": ["claude-code", "cli", "agents", "orchestration", "dashboard"],
+  "keywords": [
+    "claude-code",
+    "cli",
+    "agents",
+    "orchestration",
+    "dashboard"
+  ],
   "license": "MIT",
   "engines": {
     "node": ">=18"

@@ -6,18 +6,24 @@
 // AND drive them natively. Zero dependencies. Speaks MCP over stdio (newline-delimited
 // JSON-RPC 2.0). The control tools route through manage.js (tmux send-keys) — the same
 // channel the web cockpit uses — so an orchestrator agent can review and continue windows
-// end-to-end. There is NO auto-approve policy here: each reply is an explicit tool call the
-// orchestrator (and, through it, you) decide to make. Irreversible steps stay your call.
+// end-to-end.
+//
+// The auto-approve policy (policy.js) is the gate that makes end-to-end driving safe: an
+// autonomous driver may CONTINUE ordinary work freely, but DEPLOY / SEND / DELETE / SPEND
+// always bounce back to you. reply_to_session stays the raw, human-authorized channel (no
+// gate — you decided); auto_continue is the gated driver for the loop. The loop is:
+//   pending_questions  →  auto_continue per window  →  (gated ones surfaced to you)
 //
 // Read tools:
 //   list_sessions      — one line per live window: label, status, task, branch, age
 //   summarize_session  — full detail for one window (by sessionId, shortId, or label)
 //   whats_left         — goal + last action per unit, for the agent to triage next steps
-//   pending_questions  — ONLY the windows blocked waiting on a human, with the question text
+//   pending_questions  — ONLY the windows blocked waiting on a human, each flagged irreversible?
 //   risk_snapshot      — fleet-wide PnL + drawdowns + wedged units (adapter:"fleet")
 // The read tools take an optional `adapter` ("claude-code" default, or "fleet").
 // Control tools (write — drive a window via tmux):
-//   reply_to_session   — send a reply to a window (adopts an unmanaged window first)
+//   reply_to_session   — send a reply to a window (adopts an unmanaged window first); ungated
+//   auto_continue      — advance a window UNDER the gate; refuses to auto-approve irreversible steps
 //   send_key           — send a key (Escape / C-c / Enter) to a managed window
 //   run_window         — launch a new managed window, optionally with a first prompt
 
@@ -25,6 +31,7 @@ const { collectSessions } = require('./lib');
 const engine = require('./engine');
 const manage = require('./manage');
 const pkg = require('./package.json');
+const policy = require('./policy');
 
 const PROTOCOL_VERSION = '2024-11-05';
 const SERVER_INFO = { name: 'conductor', version: pkg.version };   // kept in sync with package.json
@@ -45,6 +52,16 @@ async function findSession(ref, minutes = 4320) {
     r.shortId.toLowerCase() === key ||
     (r.label || '').toLowerCase() === key ||
     (r.mlabel || '').toLowerCase() === key);
+}
+
+// The "question" a window is blocked on = its last assistant TEXT (the thing it's waiting on
+// you for). Falls back to its last action if it ended on a tool call.
+function lastAssistantText(s) {
+  for (let i = (s.recent || []).length - 1; i >= 0; i--) {
+    const r = s.recent[i];
+    if (r.actor === 'assistant' && r.kind === 'text') return r.summary;
+  }
+  return s.lastAction;
 }
 
 // Deliver a reply to a window: if it's already managed, send straight to its tmux window;
@@ -141,6 +158,18 @@ const TOOLS = [
         text: { type: 'string', description: 'The reply text to send (e.g. "continue", "yes", or a full instruction).' },
       },
       required: ['session', 'text'],
+    },
+  },
+  {
+    name: 'auto_continue',
+    description: 'Autonomously advance ONE waiting window UNDER THE IRREVERSIBILITY GATE — the safe way to run the driving loop. Reads the window\'s pending question; if it is ordinary work, sends `text` (default "continue") to keep it moving; if the question OR the reply involves an IRREVERSIBLE action (deploy / send / delete / spend) it does NOT send — it returns gated:true with the reason and the question so YOU escalate to the human. Pair with pending_questions: triage the list, auto_continue the safe ones, hand the gated ones to the human. WRITE action only when not gated. Use this (not raw reply_to_session) whenever you are driving without a human approving each step.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session: { type: 'string', description: 'sessionId, 8-char shortId, or friendly label of the window to advance.' },
+        text: { type: 'string', description: 'The reply to send if the gate allows it (default "continue").' },
+      },
+      required: ['session'],
     },
   },
   {
@@ -244,23 +273,38 @@ async function callTool(name, args) {
     const rows = await collectSessions({ minutes: args.minutes || 60, all: false });
     const mgd = manage.managedBySession();
     const waiting = rows.filter((s) => s.waiting);
-    // The "question" is the last assistant text — the thing it's waiting on you for.
-    const lastText = (s) => {
-      for (let i = s.recent.length - 1; i >= 0; i--) {
-        const r = s.recent[i];
-        if (r.actor === 'assistant' && r.kind === 'text') return r.summary;
-      }
-      return s.lastAction;
-    };
     return textResult({
-      note: 'Each window here has Claude speaking last then going quiet — it is blocked on a human. Reply with reply_to_session. Approve irreversible steps only with the human\'s explicit OK.',
+      note: 'Each window here has Claude speaking last then going quiet — it is blocked on a human. Drive safe ones with auto_continue (it sends "continue" when the question is ordinary work). Windows flagged irreversible touch deploy/send/delete/spend — do NOT auto-approve; surface them to the human.',
       count: waiting.length,
-      windows: waiting.map((s) => ({
-        label: s.label, sessionId: s.sessionId, shortId: s.shortId,
-        managed: !!mgd[s.sessionId], branch: s.gitBranch, cwd: s.cwd,
-        waitingFor: lastText(s), lastActive: s.lastActiveRel,
-      })),
+      windows: waiting.map((s) => {
+        const waitingFor = lastAssistantText(s);
+        const c = policy.classify(waitingFor);
+        return {
+          label: s.label, sessionId: s.sessionId, shortId: s.shortId,
+          managed: !!mgd[s.sessionId], branch: s.gitBranch, cwd: s.cwd,
+          waitingFor, lastActive: s.lastActiveRel,
+          irreversible: c.irreversible, categories: c.categories,
+        };
+      }),
     });
+  }
+  if (name === 'auto_continue') {
+    if (!args.session) throw new Error('session is required');
+    const reply = (args.text && String(args.text)) || 'continue';
+    const s = await findSession(args.session);
+    if (!s) return textResult({ ok: false, error: `no session matched "${args.session}" — try pending_questions or list_sessions.` });
+    const question = lastAssistantText(s);
+    const decision = policy.gate(question, reply);
+    if (!decision.allow) {
+      return textResult({
+        ok: false, gated: true, sent: false, session: s.label,
+        reason: decision.reason, categories: decision.categories, matched: decision.matched,
+        question, proposedReply: reply,
+        note: 'NOT sent — this is an irreversible step. Surface the question to the human; relay their decision with reply_to_session once they choose.',
+      });
+    }
+    const r = await replyToSession(args.session, reply);
+    return textResult({ ...r, gated: false, sent: !!r.ok, sentText: reply, reason: decision.reason, question });
   }
   if (name === 'reply_to_session') {
     if (!args.session) throw new Error('session is required');

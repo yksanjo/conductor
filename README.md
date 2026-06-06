@@ -140,13 +140,21 @@ Read tools: `list_sessions`, `summarize_session`, `whats_left`, and `pending_que
 (only the windows blocked waiting on a human, with the question text — the triage feed).
 
 Control tools (write, via the same tmux channel as the cockpit): `reply_to_session`
-(reply to a window, adopting a read-only one first), `send_key` (Escape / C-c / Enter to a
-managed window), and `run_window` (launch a new managed window with an optional first prompt).
+(reply to a window, adopting a read-only one first — ungated, for a human-authorized reply),
+`auto_continue` (advance a window **under the gate** — see below), `send_key` (Escape / C-c /
+Enter to a managed window), and `run_window` (launch a new managed window with an optional
+first prompt).
 
-This is what lets an orchestrator agent run windows end-to-end: poll `pending_questions`,
-read each with `summarize_session`, and `reply_to_session` to continue them. There is **no
-auto-approve policy** baked in — each reply is a deliberate tool call, and irreversible steps
-(deploy, send, delete, spend) stay a human decision.
+**The driving loop, and the gate that makes it safe.** An orchestrator runs windows
+end-to-end like this: poll `pending_questions` → each waiting window comes back flagged
+`irreversible?` → `auto_continue` the safe ones (it sends `"continue"` to keep ordinary work
+moving) and hand the flagged ones to the human. `auto_continue` consults the **irreversibility
+gate** (`policy.js`): if the window's question — or the reply you propose — touches **deploy,
+send, delete, or spend**, it refuses to send and returns the question + reason so you escalate.
+Continuing ordinary work is automatic; approving an irreversible action is always a human
+decision. The bias is to stop when unsure: a false gate costs one manual reply, a false pass
+can ship a bad deploy or move real money. `reply_to_session` stays the raw, ungated channel
+for relaying a decision the human has already made.
 
 Add it to Claude Code (user scope = available everywhere):
 

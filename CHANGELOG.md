@@ -1,7 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
 
+The **irreversibility gate** — the auto-approve policy that makes end-to-end driving safe.
+An orchestrator can now run the loop without rubber-stamping every reply: continue ordinary
+work automatically, but bounce every irreversible step back to the human.
+
+- New module `policy.js` — a zero-dependency, pure-function classifier over four irreversible
+  classes (**deploy · send · delete · spend**) plus a `gate(question, reply)` decision. Biased
+  to stop when unsure; an explicit refusal ("no, don't deploy") is always safe to relay.
+- New MCP tool `auto_continue` — advances ONE waiting window under the gate: sends `"continue"`
+  (or your text) when the question is ordinary work; when the question or reply trips an
+  irreversible class it does NOT send and returns `gated:true` with the reason + question so
+  you escalate. `reply_to_session` stays the raw, ungated channel for a human-authorized reply.
+- `pending_questions` now flags each waiting window with `irreversible` + `categories`, so the
+  triage feed itself tells you which windows you must not auto-approve.
 - **Close a window from the cockpit** — managed cards now carry an **✕ close** button next to
   **↗ open**. It kills the window's tmux session (the same thing `conductor stop <label>` does).
   Closing is irreversible (the live session and its state are lost), so it double-confirms in the
@@ -9,6 +22,8 @@
   guard — mirroring how `flatten` is gated. Only conductor-managed windows get the button; plain
   windows run in your own terminal tabs and have no handle here, so they're closed from that
   terminal (the manual now says so). Covered by `server.test.js`.
+- Tests: new `policy.test.js` (22 assertions — every class, the rubber-stamp save, refusals,
+  ordinary continuation); MCP suite covers `auto_continue`'s gate path with no spawn.
 
 ## 0.6.0
 
