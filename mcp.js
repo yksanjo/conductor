@@ -175,7 +175,7 @@ async function callTool(name, args) {
       label: s.label, sessionId: s.sessionId, cwd: s.cwd, branch: s.gitBranch,
       status: s.status, lastActive: s.lastActiveRel,
       goal: s.intent || s.task, doingNow: s.lastAction,
-      recent: s.recent.map((e) => `${e.role === 'assistant' ? 'Claude' : 'you'}: ${e.summary}`),
+      recent: s.recent.map((e) => `${e.actor === 'assistant' ? 'Claude' : 'you'}: ${e.summary}`),
     });
   }
   if (name === 'whats_left') {
@@ -196,7 +196,7 @@ async function callTool(name, args) {
     const lastText = (s) => {
       for (let i = s.recent.length - 1; i >= 0; i--) {
         const r = s.recent[i];
-        if (r.role === 'assistant' && r.kind === 'text') return r.summary;
+        if (r.actor === 'assistant' && r.kind === 'text') return r.summary;
       }
       return s.lastAction;
     };
