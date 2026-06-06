@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.6.0
+
+Conductor's engine is now a **source-agnostic supervisory core** with a pluggable adapter
+interface. Built once, proven on two adapters.
+
+- **`engine.js` + `adapters/`** — the engine (`loadAdapter`, `collect`) owns discovery
+  orchestration, liveness, grouping, status ranking, and sorting; it knows no domain. Adapters
+  own where trails live and how to read them (`discover` / `liveness` / `parse` / `status` /
+  `project` / `statuses` / `control`). Records are normalized to a stable contract.
+- **`adapters/claude-code.js`** — the original reader, ported onto the contract. Behavior is
+  unchanged; the existing test suite proves it.
+- **`adapters/fleet.js`** — first new adapter: a trading-bot fleet reading
+  `~/.fleet/bots/*/events.jsonl`. Liveness from heartbeats; `wedged` + `drawdown` signals;
+  control appends `pause|resume|flatten|set-param` to `control.jsonl`; broadcast = desk-wide
+  panic flatten. `tools/fakebot.js` emits realistic trails for testing.
+- **Surfaces generalized** — `--adapter` on the CLI, cockpit, and MCP. The CLI sections come
+  from the adapter's status vocabulary; the cockpit renders adapter-driven cards (fleet cards
+  get pause/resume/flatten + a broadcast-flatten band); the MCP read tools take an `adapter`
+  arg and gain `risk_snapshot` (PnL + drawdown + wedged units).
+- **Security** — destructive control (flatten) and every broadcast require an explicit confirm
+  token on top of the localhost + Origin + `X-Conductor` guard; the UI double-confirms. Tagline
+  is now "read-only observation, opt-in control."
+- Tests: new `fleet.test.js` (29) and `server.fleet.test.js` (14) join the unchanged Claude
+  suites; full suite green.
+
 ## 0.5.0
 
 The MCP server gains a **control surface** so an MCP-aware orchestrator can drive windows

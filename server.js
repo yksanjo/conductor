@@ -523,7 +523,8 @@ bcastEl.addEventListener('click', e=>{
   if (b.id === 'bsend') { const i=document.getElementById('binput'); replyAll(i.value); i.value=''; }
   else if (b.dataset.all != null) replyAll(b.dataset.all);
 });
-document.getElementById('binput').addEventListener('keydown', e=>{
+const binputEl = document.getElementById('binput');   // claude-only; fleet replaces this bar
+if (binputEl) binputEl.addEventListener('keydown', e=>{
   if (e.key === 'Enter') { replyAll(e.target.value); e.target.value=''; }
 });
 boardEl.addEventListener('keydown', e=>{
