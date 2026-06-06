@@ -31,6 +31,14 @@
   windows run in your own terminal tabs and have no handle here, so they're closed from that
   terminal (the manual now says so). Covered by `server.test.js`.
 
+- **Hardened `fleet` flatten (defense in depth).** `flatten` is now destructive *at the adapter
+  layer*, matching `mev-searcher`/`validator-fleet`: `control.send`/`broadcast` reject it without a
+  confirm token even when driven directly (MCP / script), not just through the cockpit — closing a
+  path where flatten could be issued ungated. The desk-wide panic-flatten is preserved: `broadcast`
+  still flattens every bot, but must carry the token (the cockpit already double-confirms; the
+  server forwards the validated token to the adapter gate). `control.destructive` is now advertised.
+  Covered by `fleet.test.js`.
+
 ## 0.6.0
 
 Conductor's engine is now a **source-agnostic supervisory core** with a pluggable adapter

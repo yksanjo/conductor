@@ -664,7 +664,8 @@ async function handle(req, res) {
       const command = p.command || {};
       if (!a.control.capabilities.includes(command.cmd)) return sendJSON(res, 400, { ok: false, error: 'unknown command' });
       if (p.confirm !== command.cmd) return sendJSON(res, 400, { ok: false, error: 'broadcast requires a confirm token' });
-      try { sendJSON(res, 200, a.control.broadcast(command)); }
+      // Forward the validated token so the adapter's own destructive gate (defense in depth) passes.
+      try { sendJSON(res, 200, a.control.broadcast({ ...command, confirm: p.confirm })); }
       catch (e) { sendJSON(res, 400, { ok: false, error: e.message }); }
     });
     return;

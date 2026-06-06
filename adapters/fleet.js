@@ -170,21 +170,31 @@ const statuses = [
 // ---------------------------------------------------------------------------
 // Control — append commands the bot polls (via the shared file-trail writer). Bot names are
 // validated (no traversal); commands are written as structured JSON, never interpolated into a
-// shell. flatten is money-moving but its confirm-token gate lives in the cockpit (server DESTRUCTIVE
-// set), preserving the desk-wide panic-flatten path — so the adapter layer keeps no destructive set.
+// shell. `flatten` is money-moving → destructive: it requires a confirm token (command.confirm ===
+// 'flatten') AT THE ADAPTER LAYER, independent of the cockpit's own guard, so flatten is gated even
+// when driven directly (MCP / script / test) — matching mev/validator's defense in depth. Unlike
+// those adapters, fleet DOES let flatten be broadcast (the desk-wide panic-flatten is the marquee
+// feature), but the broadcast must carry the same confirm token, which the cockpit double-confirms.
 // ---------------------------------------------------------------------------
 const CAPS = ['pause', 'resume', 'flatten', 'set-param'];
+const DESTRUCTIVE = new Set(['flatten']);
 
 function writeControl(bot, command = {}) {
-  const r = ft.writeControl(KIND, bot, command, { caps: CAPS });
+  const r = ft.writeControl(KIND, bot, command, { caps: CAPS, destructive: DESTRUCTIVE });
   if (!r.ok) return { ok: false, error: r.error };
   return { ok: true, bot: r.unit, command: r.command };
 }
 
 const control = {
   capabilities: CAPS,
+  destructive: Array.from(DESTRUCTIVE),
   send(target, command) { return writeControl(target, command); },
-  broadcast(command) {
+  broadcast(command = {}) {
+    // The desk-wide panic-flatten is allowed, but a destructive broadcast must carry the confirm
+    // token just like a single send — so a stray broadcast() can't flatten the whole desk ungated.
+    if (DESTRUCTIVE.has(command.cmd) && command.confirm !== command.cmd) {
+      return { ok: false, error: `"${command.cmd}" cannot be broadcast without a confirm token` };
+    }
     const bots = listBots();
     let sent = 0; const errors = [];
     for (const b of bots) { const r = writeControl(b, command); if (r.ok) sent++; else errors.push(b); }
