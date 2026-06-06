@@ -1,6 +1,13 @@
 # 🎼 Conductor
 
-**Situational awareness across your live Claude Code sessions.**
+**Supervisory awareness across a fleet of semi-autonomous workers — starting with your live
+Claude Code sessions.**
+
+Conductor is a source-agnostic supervisory core with a pluggable **adapter** interface. The
+engine owns grouping, status ranking, sectioning, and the three surfaces (CLI table, web
+cockpit, MCP server); an adapter owns where the trails live and how to read them. Claude Code is
+one adapter; a [trading-bot fleet](#the-fleet-adapter) is another. Same engine, proven twice.
+**Read-only observation, opt-in control.**
 
 ![The Conductor cockpit — your live Claude Code windows grouped by status](docs/cockpit.png)
 
@@ -30,11 +37,12 @@ Each window is a box that **leads with what it's actually about** (the session's
 summary), grouped into **Working now / Open / Recently active / Idle**. Open the visual
 version with `conductor up`.
 
-No new infrastructure. Conductor reads the transcript that every Claude Code session
-**already writes** to `~/.claude/projects/`. **Observation is read-only**; control
-(replies, launch, adopt) is **opt-in and works only on windows you hand it** via tmux.
-Zero dependencies. The server binds to `127.0.0.1` only, and state-changing requests
-require a local origin + an `X-Conductor` header (CSRF / DNS-rebinding guard).
+No new infrastructure. Conductor reads the trail each worker **already writes** (for Claude
+Code, the transcript under `~/.claude/projects/`). **Read-only observation, opt-in control**:
+watching is always-on and free; control (replies, launch, flatten) is opt-in and only where a
+real command channel exists. Zero dependencies. The server binds to `127.0.0.1` only, and
+state-changing requests require a local origin + an `X-Conductor` header (CSRF / DNS-rebinding
+guard); destructive control (flatten / broadcast) additionally requires a confirm token.
 
 ## How it works
 
@@ -219,6 +227,124 @@ continue in the managed window.
   keystrokes into managed windows. They're guarded (localhost bind + origin + `X-Conductor`
   header) so a stray web page can't reach them, but treat the cockpit as something you run
   for yourself, not a public service.
+
+## The abstraction
+
+Conductor is **supervisory awareness over a fleet of semi-autonomous workers that already emit an
+append-only activity trail, where the operator's scarce resource is attention.** Observation is
+always-on and free; control is a separate, opt-in plane added only where a real command channel
+exists.
+
+A worker fits Conductor when four things hold:
+
+1. **Many autonomous-ish units** — you're outnumbered.
+2. **Each already emits a readable trail** — no instrumentation to add.
+3. **Each is pursuing a task with intent** — so "doing now / done / what's left" is meaningful.
+4. **You supervise by exception** — surface the one that's stuck, ignore the 19 that are fine.
+
+Claude Code windows fit (transcripts + intent + you-have-10-open). Trading bots fit (event logs +
+a mandate + you-can't-watch-all-day). So do CI runners, scrapers, data pipelines — anything that
+narrates itself to disk.
+
+### The engine / adapter split
+
+```
+                  ┌────────────────────── engine.js ──────────────────────┐
+   adapter   ───▶ │ discover → liveness → parse → group → status → sort   │ ───▶ rows
+ (the trail)      └───────────────────────────────────────────────────────┘        │
+                              owns: grouping, ranking, sectioning           ┌───────┴───────┐
+                                                                         CLI · cockpit · MCP
+```
+
+The **engine** (`engine.js`) is domain-blind: `loadAdapter(name)` resolves `adapters/<name>.js`,
+`collect(adapter, opts)` runs the pipeline and returns sorted public rows. The three surfaces
+(`scan.js`, `server.js`, `mcp.js`) render those rows and are adapter-selectable with `--adapter`.
+
+## Adapters
+
+| Adapter | Reads | Liveness | Control |
+|---|---|---|---|
+| `claude-code` (default) | `~/.claude/projects/**/*.jsonl` transcripts | a live `claude` process (`lsof`) | tmux send-keys (managed windows) |
+| `fleet` | `~/.fleet/bots/*/events.jsonl` event logs | newest heartbeat freshness | append commands to `control.jsonl` |
+
+```bash
+conductor                       # claude-code (default)
+conductor --adapter fleet       # the trading-bot fleet
+conductor up --adapter fleet    # the cockpit, fleet mode
+```
+
+### The fleet adapter
+
+A convention-over-config trading desk. Each bot appends to `~/.fleet/bots/<bot>/events.jsonl`,
+one JSON record per line — `{ ts, type, ... }` where `type ∈ signal | order | fill | pnl |
+heartbeat | error` — and an optional `~/.fleet/bots/<bot>/meta.json` gives
+`{ strategy, mandate, venue, symbol }`. The adapter derives:
+
+- **liveness** from heartbeat freshness;
+- a **`wedged`** signal — an order/signal stuck with no fill past a threshold;
+- a **`drawdown`** signal — equity off its running peak;
+- position, session PnL, and venue as context chips.
+
+Units are sectioned **WEDGED → DRAWDOWN → TRADING → IDLE** (problems first — supervise by
+exception). Control appends `pause | resume | flatten | set-param` to the bot's `control.jsonl`,
+which the bot polls; the cockpit's **broadcast-flatten** is the desk-wide panic button (confirm
+token + double-confirm). Try it without a venue:
+
+```bash
+node tools/fakebot.js alpha --scenario healthy
+node tools/fakebot.js beta  --scenario wedged
+node tools/fakebot.js gamma --scenario drawdown
+conductor --adapter fleet
+```
+
+The MCP server adds **`risk_snapshot`** (total PnL + worst drawdowns + wedged units) for an
+orchestrator agent driving the desk.
+
+## Writing a new adapter
+
+Drop a file at `adapters/<name>.js` exporting the contract below, and every surface works with
+`--adapter <name>` — no engine changes.
+
+```js
+module.exports = {
+  // REQUIRED
+  discover(opts)          { /* → array of trail handles (file paths, dirs, cursors) */ },
+  parse(handle, opts)     { /* → a normalized record (below), or null to drop it */ },
+
+  // OPTIONAL
+  liveness(handles, opts) { /* → Set of handles live right now; else engine falls back to recency */ },
+  status(record, { live, now }) { /* → a status key string from record.statusInputs */ },
+  project(baseRow)        { /* → the public row shape for this domain (add domain fields) */ },
+  statuses: [ { key, title, word, color } ],   // ordered vocabulary → sections + sort order
+  control: {                                    // opt-in command plane
+    capabilities: ['pause', 'flatten', /* … */],
+    send(target, command)  { /* one unit */ },
+    broadcast(command)     { /* all units */ },
+  },
+};
+```
+
+**The normalized record** (the stable contract the engine depends on):
+
+```js
+{
+  id,                 // stable unique id for the unit
+  shortId,            // display id
+  label,              // friendly name (project / bot / agent)
+  title,              // plain-language "what this unit is about"
+  intent,             // its goal / mandate
+  context,            // array of chips, e.g. ["feat-branch"] or ["Hyperliquid", "+2.3%"]
+  recent: [ { actor, kind, summary, ts } ],  // ring-buffered recent events
+  lastAction,         // one-line "doing now"
+  lastActivityTs,     // ms epoch of true last activity
+  statusInputs: { … } // adapter-specific signals the engine maps to a status
+}
+```
+
+Notes: the engine groups records by `id` (freshest wins), applies `liveness`, computes `status`,
+sorts by your `statuses` order then recency, and runs `project` to produce the public row.
+`adapters/claude-code.js` and `adapters/fleet.js` are the two worked examples. Stream large trails
+(don't load them whole); bound any wide scan's concurrency. Zero runtime dependencies, Node ≥18.
 
 ## License
 
