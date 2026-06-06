@@ -16,19 +16,38 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 const { collectSessions } = require('./lib');
+const engine = require('./engine');
 const manage = require('./manage');
 
 let MANUAL = '<!doctype html><title>Conductor manual</title><body style="font:14px sans-serif;padding:40px">Manual not found.</body>';
 try { MANUAL = fs.readFileSync(path.join(__dirname, 'docs', 'manual.html'), 'utf8'); } catch { /* ignore */ }
 
 function parseArgs(argv) {
-  const a = { port: parseInt(process.env.CONDUCTOR_PORT, 10) || 7591, open: true };
+  const a = { port: parseInt(process.env.CONDUCTOR_PORT, 10) || 7591, open: true, adapter: 'claude-code' };
   for (let i = 2; i < argv.length; i++) {
     const v = argv[i];
     if (v === '--port') a.port = parseInt(argv[++i], 10) || a.port;
     else if (v === '--no-open') a.open = false;
+    else if (v === '--adapter') a.adapter = String(argv[++i] || 'claude-code');
   }
   return a;
+}
+
+// The adapter this cockpit serves (set at boot from --adapter). claude-code keeps its rich
+// tmux control plane + existing endpoints; other adapters (e.g. fleet) route through the generic
+// engine + adapter.control. Validated against the same whitelist the engine uses.
+let ADAPTER_NAME = 'claude-code';
+function activeAdapter() {
+  try { return engine.loadAdapter(ADAPTER_NAME); } catch { ADAPTER_NAME = 'claude-code'; return engine.loadAdapter('claude-code'); }
+}
+function colorHex(name) {
+  return ({ green: '#3ee07f', cyan: '#46d8c6', amber: '#f5b13f', red: '#ff5a6a', dim: '#6a6a85' })[name] || '#6a6a85';
+}
+function adapterMeta() {
+  const a = activeAdapter();
+  const statuses = (a.statuses || engine.DEFAULT_STATUSES).map((s) => ({ key: s.key, title: s.title, word: s.word, color: colorHex(s.color) }));
+  const capabilities = (a.control && a.control.capabilities) || [];
+  return { adapter: ADAPTER_NAME, statuses, capabilities };
 }
 
 const PAGE = /* html */ `<!doctype html>
@@ -130,6 +149,10 @@ const PAGE = /* html */ `<!doctype html>
   .qbtns { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:7px; }
   .qb { font:inherit; font-size:11px; font-weight:600; color:var(--txt); background:rgba(255,255,255,.05); border:1px solid var(--line2); border-radius:7px; padding:4px 9px; cursor:pointer; transition:.12s; }
   .qb:hover { background:rgba(169,116,255,.18); border-color:var(--accent); }
+  .qb.danger { color:#ff8a96; border-color:rgba(255,90,106,.4); }
+  .qb.danger:hover { background:rgba(255,90,106,.18); border-color:#ff5a6a; }
+  .bcast.fleet { background:linear-gradient(120deg,rgba(255,90,106,.12),rgba(245,177,63,.06)); border-color:rgba(255,90,106,.32); }
+  .bcast.fleet .blabel b, .bcast.fleet .blabel { color:#ff8a96; }
   .qrow { display:flex; gap:5px; }
   .qin { flex:1; min-width:0; font:inherit; font-size:11.5px; color:var(--txt); background:rgba(0,0,0,.25); border:1px solid var(--line); border-radius:7px; padding:5px 9px; }
   .qin:focus { outline:none; border-color:var(--accent); }
@@ -206,19 +229,16 @@ const PAGE = /* html */ `<!doctype html>
 <div class="toast" id="toast"></div>
 
 <script>
+const ADAPTER = '__ADAPTER__';
+let META = __META__;                 // { adapter, statuses:[{key,title,word,color}], capabilities }
 let WINDOW = '60';
 let DATA = [];
 let lastHash = '';
 
 const esc = (s)=> (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const STATUS_LABEL = { active:'working', open:'open', recent:'recent', idle:'idle' };
-
-const SECTIONS = [
-  { k:'active', t:'Working now',     c:'#3ee07f' },
-  { k:'open',   t:'Open',            c:'#46d8c6' },
-  { k:'recent', t:'Recently active', c:'#f5b13f' },
-  { k:'idle',   t:'Idle',            c:'#6a6a85' },
-];
+function statusMeta(k){ return (META.statuses||[]).find(s=>s.key===k) || { key:k, title:k, word:k, color:'#6a6a85' }; }
+function statusLabel(k){ return statusMeta(k).word; }
+function sections(){ return (META.statuses||[]).map(s=>({ k:s.key, t:s.title, c:s.color })); }
 
 function typingNow() {
   const a = document.activeElement;
@@ -227,24 +247,26 @@ function typingNow() {
 async function load() {
   const q = WINDOW==='all' ? 'all=1' : 'minutes='+WINDOW;
   try {
-    const r = await fetch('/api/sessions?'+q);
+    const r = await fetch('/api/sessions?adapter='+encodeURIComponent(ADAPTER)+'&'+q);
     const j = await r.json();
     DATA = j.sessions;
+    if (j.statuses) META = { adapter:j.adapter, statuses:j.statuses, capabilities:j.capabilities };
     // Structure = which windows / status / managed. Time + last-action churn every few
     // seconds but DON'T change structure, so we update those in place and never rebuild the
     // DOM (which would wipe a reply you're typing). Only a real structural change rebuilds —
     // and even then we defer while you're typing.
-    const structure = WINDOW + '|' + JSON.stringify(DATA.map(s=>[s.sessionId,s.status,s.managed]));
+    const structure = WINDOW + '|' + JSON.stringify(DATA.map(s=>[s.id||s.sessionId,s.status,s.managed]));
     if (structure !== lastHash && !typingNow()) { lastHash = structure; render(); }
     else updateInPlace();
   } catch(e) { /* keep last render */ }
 }
 
 function updateInPlace() {
-  document.getElementById('count').textContent = DATA.length ? DATA.length+' window'+(DATA.length>1?'s':'') : '';
-  document.getElementById('bcount').textContent = DATA.filter(s=>s.managed).length;
+  const unit = ADAPTER==='claude-code' ? 'window' : 'bot';
+  document.getElementById('count').textContent = DATA.length ? DATA.length+' '+unit+(DATA.length>1?'s':'') : '';
+  const bc = document.getElementById('bcount'); if (bc) bc.textContent = DATA.filter(s=>s.managed).length;
   for (const s of DATA) {
-    const card = document.querySelector('.card[data-id="'+s.sessionId+'"]');
+    const card = document.querySelector('.card[data-id="'+(s.id||s.sessionId)+'"]');
     if (!card) continue;
     const t = card.querySelector('.time'); if (t && t.textContent !== s.lastActiveRel) t.textContent = s.lastActiveRel;
     const tk = card.querySelector('.task'); const v = s.lastAction || s.intent || '—';
@@ -270,9 +292,13 @@ function ctrlHTML(s) {
 }
 
 function cardHTML(s) {
-  return \`<div class="card \${s.status}" data-id="\${s.sessionId}">
+  return ADAPTER === 'claude-code' ? claudeCard(s) : fleetCard(s);
+}
+function claudeCard(s) {
+  const sm = statusMeta(s.status);
+  return \`<div class="card \${s.status}" data-id="\${s.sessionId}" style="--c:\${sm.color}">
       <div class="ctop">
-        <span class="pill \${s.status}"><i></i>\${STATUS_LABEL[s.status]||s.status}</span>
+        <span class="pill \${s.status}" style="--c:\${sm.color}"><i></i>\${statusLabel(s.status)}</span>
         \${s.managed ? '<span class="mbadge">managed</span>' : ''}
         <span class="time">\${esc(s.lastActiveRel)}</span>
       </div>
@@ -280,6 +306,24 @@ function cardHTML(s) {
       <div class="task">\${esc(s.lastAction || s.intent || '—')}</div>
       <div class="cfoot">\${s.place ? '<span class="chip">'+esc(s.place)+'</span>' : ''}\${s.gitBranch ? '<span class="chip">'+esc(s.gitBranch)+'</span>' : ''}\${s.managed ? '<span class="mbadge">managed</span><button class="bopen" data-open="'+esc(s.mlabel)+'" title="Open this window in Terminal">↗ open</button>' : ''}</div>
       \${ctrlHTML(s)}
+    </div>\`;
+}
+// Fleet card: read-only observation + opt-in per-bot control (pause/resume/flatten). Flatten is
+// destructive → double-confirmed in fleetControl().
+function fleetCard(s) {
+  const sm = statusMeta(s.status);
+  const chips = (s.context||[]).map(c=>'<span class="chip">'+esc(c)+'</span>').join('');
+  const caps = META.capabilities || [];
+  const btn = (cmd,label,cls)=> caps.includes(cmd) ? '<button class="qb '+(cls||'')+'" data-bot="'+esc(s.id)+'" data-cmd="'+cmd+'">'+label+'</button>' : '';
+  return \`<div class="card \${s.status}" data-id="\${esc(s.id)}" style="--c:\${sm.color}">
+      <div class="ctop">
+        <span class="pill" style="--c:\${sm.color}"><i></i>\${statusLabel(s.status)}</span>
+        <span class="time">\${esc(s.lastActiveRel)}</span>
+      </div>
+      <div class="label">\${esc(s.title || s.label)}</div>
+      <div class="task">\${esc(s.lastAction || s.intent || '—')}</div>
+      <div class="cfoot">\${chips}</div>
+      <div class="ctrl"><div class="qbtns">\${btn('pause','⏸ Pause')}\${btn('resume','▶ Resume')}\${btn('flatten','🛑 Flatten','danger')}</div></div>
     </div>\`;
 }
 
@@ -340,8 +384,54 @@ async function openCLI(id) {
     else toast('open failed: '+(j.error||'?'));
   } catch(e) { toast('open failed'); }
 }
-// build broadcast quick-buttons once
-document.getElementById('bbtns').innerHTML = QUICK.map(q => '<button class="qb" data-all="'+esc(q[1])+'">'+q[0]+'</button>').join('');
+// --- fleet control: per-bot pause/resume/flatten + desk-wide flatten ----------------------
+async function fleetControl(bot, cmd) {
+  let confirmTok;
+  if (cmd === 'flatten') {
+    if (!confirm('Flatten '+bot+'? This sends a market-flatten command to that bot.')) return;
+    confirmTok = 'flatten';
+  }
+  try {
+    const r = await fetch('/api/control', { method:'POST', headers:{'content-type':'application/json','x-conductor':'1'},
+      body:JSON.stringify({ adapter:ADAPTER, target:bot, command:{cmd}, confirm:confirmTok }) });
+    const j = await r.json();
+    toast(j.ok ? '→ '+cmd+' → '+bot : (cmd+' failed: '+(j.error||'?')));
+  } catch(e) { toast(cmd+' failed'); }
+}
+async function deskFlatten() {
+  // destructive + desk-wide → double confirm, then a confirm token
+  if (!confirm('⚠ FLATTEN THE ENTIRE DESK?\\nEvery bot gets a market-flatten command.')) return;
+  if (!confirm('Are you absolutely sure? This affects ALL bots.')) return;
+  try {
+    const r = await fetch('/api/broadcast', { method:'POST', headers:{'content-type':'application/json','x-conductor':'1'},
+      body:JSON.stringify({ adapter:ADAPTER, command:{cmd:'flatten'}, confirm:'flatten' }) });
+    const j = await r.json();
+    toast(j.ok ? '🛑 flatten sent to '+j.sent+'/'+j.total+' bots' : 'flatten failed: '+(j.error||'?'));
+  } catch(e) { toast('flatten failed'); }
+}
+
+// Adapt the header + broadcast bar to the active adapter. Claude keeps its "prompt all managed"
+// bar + New-window button; fleet replaces them with a desk-wide panic-flatten band.
+function setupChrome() {
+  const ck = document.querySelector('.ck'); if (ck) ck.textContent = ADAPTER==='claude-code' ? 'Cockpit' : 'Fleet';
+  const legend = document.querySelector('.legend');
+  if (legend) legend.innerHTML = (META.statuses||[]).filter(s=>s.key!=='idle')
+    .map(s=>'<span><i style="background:'+s.color+'"></i>'+esc(s.word)+'</span>').join('');
+  if (ADAPTER !== 'claude-code') {
+    const nb = document.getElementById('newbtn'); if (nb) nb.style.display='none';
+    const bc = document.getElementById('bcast');
+    bc.classList.add('fleet');
+    bc.innerHTML = '<span class="blabel">🛑 Desk-wide</span>'
+      + '<div class="bbtns"><button class="qb danger" id="flattenAll">Flatten all bots</button></div>'
+      + '<span style="color:var(--dim);font-size:11px">read-only observation · opt-in control</span>';
+    bc.style.display = 'flex';
+    document.getElementById('flattenAll').addEventListener('click', deskFlatten);
+  } else {
+    // build claude broadcast quick-buttons once
+    document.getElementById('bbtns').innerHTML = QUICK.map(q => '<button class="qb" data-all="'+esc(q[1])+'">'+q[0]+'</button>').join('');
+  }
+}
+setupChrome();
 
 function openLauncher() {
   document.getElementById('modal').innerHTML = \`
@@ -372,10 +462,13 @@ document.getElementById('newbtn').addEventListener('click', openLauncher);
 function render() {
   const board = document.getElementById('board');
   const empty = document.getElementById('empty');
-  document.getElementById('count').textContent = DATA.length ? DATA.length+' window'+(DATA.length>1?'s':'') : '';
-  const mc = DATA.filter(s=>s.managed).length;
-  document.getElementById('bcount').textContent = mc;
-  document.getElementById('bcast').style.display = mc ? 'flex' : 'none';
+  const unit = ADAPTER==='claude-code' ? 'window' : 'bot';
+  document.getElementById('count').textContent = DATA.length ? DATA.length+' '+unit+(DATA.length>1?'s':'') : '';
+  if (ADAPTER === 'claude-code') {
+    const mc = DATA.filter(s=>s.managed).length;
+    document.getElementById('bcount').textContent = mc;
+    document.getElementById('bcast').style.display = mc ? 'flex' : 'none';
+  }
   if (!DATA.length) {
     board.innerHTML=''; empty.style.display='block';
     empty.textContent = 'No sessions in this window. Try a wider range →';
@@ -383,7 +476,7 @@ function render() {
   }
   empty.style.display='none';
   let html = '';
-  for (const sec of SECTIONS) {
+  for (const sec of sections()) {
     const items = DATA.filter(s => s.status === sec.k);
     if (!items.length) continue;
     html += \`<div class="section-head"><span class="sdot" style="color:\${sec.c};background:\${sec.c}"></span>\`
@@ -408,6 +501,8 @@ function dispatchReply(el, text) {
   else if (el.dataset.session != null) replyAdopt(el.dataset.session, text); // plain → adopt + send
 }
 boardEl.addEventListener('click', e=>{
+  const fb = e.target.closest('[data-cmd]');                 // fleet control button
+  if (fb) { e.stopPropagation(); fleetControl(fb.dataset.bot, fb.dataset.cmd); return; }
   const ob = e.target.closest('.bopen');
   if (ob) { e.stopPropagation(); openTerm(ob.dataset.open); return; }
   const qb = e.target.closest('.qb,.qsend');
@@ -419,7 +514,7 @@ boardEl.addEventListener('click', e=>{
   }
   if (e.target.closest('.ctrl')) return;       // clicks in the reply area shouldn't open the modal
   const card = e.target.closest('.card');
-  if (card) openCLI(card.dataset.id);
+  if (card && ADAPTER === 'claude-code') openCLI(card.dataset.id);
 });
 // broadcast bar
 const bcastEl = document.getElementById('bcast');
@@ -478,6 +573,9 @@ function localOrigin(req) {
 function writeAllowed(req) {
   return localHost(req) && localOrigin(req) && req.headers['x-conductor'] === '1';
 }
+// Commands that move real money / state and must carry an explicit confirm token (the UI also
+// double-confirms). broadcast is always treated as destructive regardless of command.
+const DESTRUCTIVE = new Set(['flatten']);
 // Drive a freshly launched/adopted window from boot to "ready" and deliver the reply once the
 // prompt box is up. Shared with the MCP control tools — see manage.deliverAdopted.
 const deliverAdopted = manage.deliverAdopted;
@@ -488,22 +586,65 @@ async function handle(req, res) {
   if (req.method === 'POST' && !writeAllowed(req)) {
     return sendJSON(res, 403, { ok: false, error: 'forbidden — local origin + X-Conductor header required' });
   }
+  if (url.pathname === '/api/meta') {
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    res.end(JSON.stringify(adapterMeta()));
+    return;
+  }
+
   if (url.pathname === '/api/sessions') {
     const all = url.searchParams.get('all') === '1';
     const minutes = parseInt(url.searchParams.get('minutes'), 10) || 60;
+    const meta = adapterMeta();
     try {
-      const rows = await collectSessions({ minutes, all });
-      const mgd = manage.managedBySession();           // sessionId -> managed window
-      for (const r of rows) {
-        const w = mgd[r.sessionId];
-        if (w) { r.managed = true; r.mlabel = w.label; }
+      let rows;
+      if (ADAPTER_NAME === 'claude-code') {
+        rows = await collectSessions({ minutes, all });
+        const mgd = manage.managedBySession();         // sessionId -> managed window
+        for (const r of rows) {
+          const w = mgd[r.sessionId];
+          if (w) { r.managed = true; r.mlabel = w.label; }
+        }
+      } else {
+        rows = await engine.collect(activeAdapter(), { minutes, all });
       }
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-      res.end(JSON.stringify({ generatedAt: new Date().toISOString(), count: rows.length, sessions: rows }));
+      res.end(JSON.stringify({ generatedAt: new Date().toISOString(), adapter: meta.adapter, statuses: meta.statuses, capabilities: meta.capabilities, count: rows.length, sessions: rows }));
     } catch (e) {
       res.writeHead(500, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: e.message }));
     }
+    return;
+  }
+
+  // Generic per-unit control (used by non-claude adapters, e.g. fleet pause/resume/flatten).
+  // Destructive commands (flatten) require an explicit confirm token in the body.
+  if (url.pathname === '/api/control' && req.method === 'POST') {
+    readBody(req, res, (p) => {
+      const a = activeAdapter();
+      if (!a.control || typeof a.control.send !== 'function') return sendJSON(res, 400, { ok: false, error: 'adapter has no control plane' });
+      const command = p.command || {};
+      if (!a.control.capabilities.includes(command.cmd)) return sendJSON(res, 400, { ok: false, error: 'unknown command' });
+      if (DESTRUCTIVE.has(command.cmd) && p.confirm !== command.cmd) {
+        return sendJSON(res, 400, { ok: false, error: `"${command.cmd}" is destructive — confirm token required` });
+      }
+      try { sendJSON(res, 200, a.control.send(p.target, command)); }
+      catch (e) { sendJSON(res, 400, { ok: false, error: e.message }); }
+    });
+    return;
+  }
+
+  // Desk-wide broadcast (e.g. the panic flatten). Always destructive → confirm token required.
+  if (url.pathname === '/api/broadcast' && req.method === 'POST') {
+    readBody(req, res, (p) => {
+      const a = activeAdapter();
+      if (!a.control || typeof a.control.broadcast !== 'function') return sendJSON(res, 400, { ok: false, error: 'adapter has no broadcast' });
+      const command = p.command || {};
+      if (!a.control.capabilities.includes(command.cmd)) return sendJSON(res, 400, { ok: false, error: 'unknown command' });
+      if (p.confirm !== command.cmd) return sendJSON(res, 400, { ok: false, error: 'broadcast requires a confirm token' });
+      try { sendJSON(res, 200, a.control.broadcast(command)); }
+      catch (e) { sendJSON(res, 400, { ok: false, error: e.message }); }
+    });
     return;
   }
 
@@ -589,8 +730,11 @@ async function handle(req, res) {
     return;
   }
   if (url.pathname === '/' || url.pathname === '/index.html') {
+    const html = PAGE
+      .replace('__ADAPTER__', ADAPTER_NAME)
+      .replace('__META__', JSON.stringify(adapterMeta()));
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-    res.end(PAGE);
+    res.end(html);
     return;
   }
   res.writeHead(404, { 'content-type': 'text/plain' });
@@ -605,6 +749,8 @@ function openBrowser(url) {
 
 function main() {
   const args = parseArgs(process.argv);
+  try { engine.loadAdapter(args.adapter); ADAPTER_NAME = args.adapter; }
+  catch (e) { console.error('conductor: ' + e.message + ' — falling back to claude-code'); ADAPTER_NAME = 'claude-code'; }
   const url = `http://localhost:${args.port}`;
   const server = http.createServer(handle);
 
