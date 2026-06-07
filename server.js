@@ -250,8 +250,7 @@ function bcastChip(label){
   if (Date.now() - b.at > 45000) return '';            // fade after ~45s; it's a transient signal
   const M = {
     started:        ['✅ running',   'var(--ok,#3ecf8e)', 'prompt accepted — turn is running'],
-    sent:           ['↵ sent',       'var(--ok,#3ecf8e)', 'prompt delivered (input box cleared)'],
-    'sent-unverified':['? unverified','#d9a441',          'keystrokes sent but text still in the input box — check it'],
+    sent:           ['↵ sent',       'var(--ok,#3ecf8e)', 'prompt delivered to a ready prompt'],
     skipped:        ['⏸ '+(b.stage==='trust'?'trust prompt':b.stage==='resume'?'resume picker':'busy'),
                      '#d9a441', 'not at a ready prompt ('+(b.stage||'busy')+') — nothing was typed; open the window'],
     gone:           ['✕ gone',       'var(--dim)',        'window no longer exists'],
@@ -380,7 +379,7 @@ async function reply(label, text) {
     const r = await fetch('/api/say', { method:'POST', headers:{'content-type':'application/json','x-conductor':'1'}, body:JSON.stringify({label, text}) });
     const j = await r.json();
     recordBcast([{ label: j.label || label, status: j.ok ? (j.status||'sent') : (j.status||'error'), stage: j.stage }]);
-    if (j.ok) toast(j.status==='started' ? '✅ '+label+' is running it' : j.status==='sent-unverified' ? '? '+label+': sent but unconfirmed — check it' : '↵ sent to '+label);
+    if (j.ok) toast(j.status==='started' ? '✅ '+label+' is running it' : '↵ sent to '+label);
     else toast(j.status==='skipped' ? '⏸ '+label+' not ready ('+(j.stage||'busy')+') — nothing typed' : 'send failed: '+(j.error||j.status||'?'));
     render();
   } catch(e) { toast('send failed'); }

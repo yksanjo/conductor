@@ -9,13 +9,14 @@
   state, the text was typed into the wrong place and the toast still said "sent to N windows."
   - **`manage.deliver(label, text)`** replaces the raw `say()` in the broadcast/reply path. It
     refuses to type unless `paneStage` is `ready` (otherwise returns `{status:'skipped', stage}`),
-    then reads the pane back to classify the result: `started` (turn visibly running),
-    `sent` (input box cleared), or `sent-unverified` (text still sitting in the box).
+    then reads the pane back to classify the result: `started` (turn visibly running) or `sent`
+    (delivered to a ready prompt). A broadcast fires every ready window first and settles **once**
+    before confirming, so it no longer freezes the single-threaded cockpit per window.
   - **`sayAll()` returns a per-window breakdown** (`results[]` + `started`/`skipped`/`total`)
     instead of a single count. `/api/say` and the MCP `reply_to_session` route through `deliver`
     too, so both surfaces report when a window wasn't ready rather than failing silently.
   - **Cockpit shows it.** Each managed card paints a status chip after a broadcast/reply
-    (✅ running · ↵ sent · ? unverified · ⏸ trust prompt/busy · ✕ gone), and the broadcast toast
+    (✅ running · ↵ sent · ⏸ trust prompt/busy · ✕ gone), and the broadcast toast
     summarizes "N/M got it · K skipped (see cards)". Chips fade after ~45s.
 - **Two more adapters — `mev-searcher` and `validator-fleet`.** Both supervise crypto-native fleets
   by exception, extending the engine with no surface changes.
