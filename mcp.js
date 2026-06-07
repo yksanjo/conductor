@@ -178,10 +178,19 @@ function textResult(obj) {
 async function callTool(name, args) {
   args = args || {};
   if (name === 'list_sessions') {
-    const rows = await collectFor(args.adapter, { minutes: args.minutes || 60, all: !!args.all });
+    // Hard cap so `all:true` (which ignores the time filter and can return
+    // thousands of historical sessions) can't blow the MCP token ceiling.
+    // Rows are sorted by status rank then newest-within-rank (engine.js),
+    // so the cap keeps the live/active units and drops the stale tail.
+    const LIST_CAP = 200;
+    const all = await collectFor(args.adapter, { minutes: args.minutes || 60, all: !!args.all });
+    const rows = all.slice(0, LIST_CAP);
+    const truncated = all.length > rows.length
+      ? { truncated: true, totalMatched: all.length, shown: rows.length, hint: `Output capped at ${LIST_CAP} most-recent units. Narrow with 'minutes' instead of 'all' to see fewer.` }
+      : {};
     if (args.adapter && args.adapter !== 'claude-code') {
       return textResult({
-        adapter: args.adapter, count: rows.length,
+        adapter: args.adapter, count: rows.length, ...truncated,
         units: rows.map((s) => ({
           id: s.id, shortId: s.shortId, label: s.label, title: s.title,
           status: s.status, context: s.context, lastActive: s.lastActiveRel,
@@ -189,7 +198,7 @@ async function callTool(name, args) {
       });
     }
     return textResult({
-      count: rows.length,
+      count: rows.length, ...truncated,
       sessions: rows.map((s) => ({
         sessionId: s.sessionId, shortId: s.shortId, label: s.label,
         status: s.status, task: s.task, branch: s.gitBranch,
