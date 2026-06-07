@@ -1,6 +1,9 @@
 {
-  "name": "conductor-cli",
+  "name": "@yksanjo/conductor",
   "version": "0.7.0",
+  "publishConfig": {
+    "access": "public"
+  },
   "description": "Situational awareness across a fleet of semi-autonomous workers. Pluggable adapters (Claude Code windows, trading bots, …) on one zero-dependency engine; read-only observation, opt-in control with an irreversibility gate.",
   "bin": {
     "conductor": "cli.js",
