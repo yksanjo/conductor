@@ -79,6 +79,26 @@ function notify(method, params) { srv.stdin.write(JSON.stringify({ jsonrpc: '2.0
   ok('list_sessions label prettified (Gamma)', lsData.sessions[0].label === 'Gamma');
   ok('list_sessions reports task', lsData.sessions[0].task === 'Ship the MCP server');
 
+  // Regression: `all:true` ignores the time filter and once returned thousands of
+  // historical sessions (807K chars) — blowing the MCP token ceiling. The handler
+  // now hard-caps output at 200 and reports truncation. Seed 205 sessions to prove it.
+  for (let i = 0; i < 205; i++) {
+    const id = `ffffffff-0000-0000-0000-${String(i).padStart(12, '0')}`;
+    fs.writeFileSync(path.join(proj, id + '.jsonl'),
+      [
+        { type: 'last-prompt', sessionId: id, lastPrompt: 'seed ' + i },
+        { type: 'assistant', sessionId: id, cwd: '/Users/test/gamma', gitBranch: 'main', timestamp: iso(60_000 + i * 1000), message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: 'x.js' } }] } },
+      ].map((r) => JSON.stringify(r)).join('\n') + '\n');
+  }
+  const lsAll = await rpc('tools/call', { name: 'list_sessions', arguments: { all: true } });
+  const lsAllData = JSON.parse(lsAll.result.content[0].text);
+  ok('list_sessions all:true caps output at 200', lsAllData.count === 200 && lsAllData.sessions.length === 200);
+  ok('list_sessions all:true flags truncation honestly', lsAllData.truncated === true && lsAllData.totalMatched >= 206 && lsAllData.shown === 200);
+  // Remove the seeds so later assertions see only the original Gamma session.
+  for (let i = 0; i < 205; i++) {
+    fs.rmSync(path.join(proj, `ffffffff-0000-0000-0000-${String(i).padStart(12, '0')}.jsonl`));
+  }
+
   const sum = await rpc('tools/call', { name: 'summarize_session', arguments: { session: 'Gamma' } });
   const sumData = JSON.parse(sum.result.content[0].text);
   ok('summarize_session by label resolves', sumData.sessionId === sid);

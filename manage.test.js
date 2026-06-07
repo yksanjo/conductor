@@ -70,13 +70,30 @@ if (!tmuxOk()) {
   const rpane = spawnSync('tmux', ['capture-pane', '-p', '-t', 'conductor:' + RL], { encoding: 'utf8' }).stdout || '';
   ok('say into a run-created window lands', rpane.includes(rmark));
 
-  // --- sayAll broadcasts to every managed window (LBL + RL are both live) ---
-  const bmark = 'bcast_' + process.pid;
-  const ball = m.sayAll({ text: bmark });
-  ok('sayAll hits all managed (sent === total ≥ 2)', ball.ok && ball.total >= 2 && ball.sent === ball.total);
-  spawnSync('sleep', ['0.4']);
-  const rpane2 = spawnSync('tmux', ['capture-pane', '-p', '-t', 'conductor:' + RL], { encoding: 'utf8' }).stdout || '';
-  ok('sayAll reached the run window', rpane2.includes(bmark));
+  // --- deliver() GATES on readiness: a plain cat/shell pane is not a ready Claude prompt, so
+  //     the prompt must NOT be typed in blind (the bug being fixed) — it comes back skipped. ---
+  const gmark = 'gate_' + process.pid;
+  const gres = m.deliver(RL, gmark);
+  ok('deliver() skips a non-ready pane (does not type blind)', gres.ok === false && gres.status === 'skipped');
+  spawnSync('sleep', ['0.3']);
+  const gpane = spawnSync('tmux', ['capture-pane', '-p', '-t', 'conductor:' + RL], { encoding: 'utf8' }).stdout || '';
+  ok('deliver() left the non-ready pane untouched (marker absent)', !gpane.includes(gmark));
+
+  // --- deliver() into a pane that LOOKS ready (inject a Claude footer so paneStage→ready) lands ---
+  spawnSync('tmux', ['send-keys', '-t', 'conductor:' + RL, '-l', '--', '? for shortcuts']);
+  spawnSync('tmux', ['send-keys', '-t', 'conductor:' + RL, 'Enter']); spawnSync('sleep', ['0.3']);
+  ok('paneStage sees the injected footer as ready', m.paneStage(RL) === 'ready');
+  const dmark = 'deliver_' + process.pid;
+  const dres = m.deliver(RL, dmark);
+  ok('deliver() into a ready pane reports ok with a status', dres.ok === true && !!dres.status);
+  spawnSync('sleep', ['0.3']);
+  const dpane = spawnSync('tmux', ['capture-pane', '-p', '-t', 'conductor:' + RL], { encoding: 'utf8' }).stdout || '';
+  ok('deliver() into a ready pane actually sends the text', dpane.includes(dmark));
+
+  // --- sayAll returns a per-window breakdown (the cockpit renders it as chips) ---
+  const ball = m.sayAll({ text: 'bcast_' + process.pid });
+  ok('sayAll returns per-window results + counts', ball.ok && Array.isArray(ball.results)
+     && ball.results.length === ball.total && (ball.started + ball.skipped) <= ball.total);
 
   // --- adopt() launches `--resume <id> --fork-session` (cmd:'echo' lets us read the args) ---
   const AL = 'atest' + process.pid;
