@@ -188,6 +188,8 @@ function writeControl(bot, command = {}) {
 const control = {
   capabilities: CAPS,
   destructive: Array.from(DESTRUCTIVE),
+  // Cockpit hint for the desk-wide band: which broadcast this fleet offers + whether it's dangerous.
+  broadcastUi: { cmd: 'flatten', label: '🛑 Flatten all bots', danger: true },
   send(target, command) { return writeControl(target, command); },
   broadcast(command = {}) {
     // The desk-wide panic-flatten is allowed, but a destructive broadcast must carry the confirm

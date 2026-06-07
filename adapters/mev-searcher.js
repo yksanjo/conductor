@@ -194,6 +194,8 @@ function writeControl(bot, command = {}) {
 const control = {
   capabilities: CAPS,
   destructive: Array.from(DESTRUCTIVE),
+  // Cockpit hint for the desk-wide band: the gas-spike/reorg panic stop is a non-destructive pause.
+  broadcastUi: { cmd: 'pause', label: '⏸ Pause all searchers', danger: false },
   send(target, command) { return writeControl(target, command); },
   broadcast(command) {
     if (DESTRUCTIVE.has((command || {}).cmd)) {

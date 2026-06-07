@@ -47,7 +47,9 @@ function adapterMeta() {
   const a = activeAdapter();
   const statuses = (a.statuses || engine.DEFAULT_STATUSES).map((s) => ({ key: s.key, title: s.title, word: s.word, color: colorHex(s.color) }));
   const capabilities = (a.control && a.control.capabilities) || [];
-  return { adapter: ADAPTER_NAME, statuses, capabilities };
+  const destructive = (a.control && a.control.destructive) ? Array.from(a.control.destructive) : [];
+  const broadcastUi = (a.control && a.control.broadcastUi) || null;
+  return { adapter: ADAPTER_NAME, statuses, capabilities, destructive, broadcastUi };
 }
 
 const PAGE = /* html */ `<!doctype html>
@@ -238,6 +240,30 @@ let META = __META__;                 // { adapter, statuses:[{key,title,word,col
 let WINDOW = '60';
 let DATA = [];
 let lastHash = '';
+// Last broadcast/reply outcome per managed window, so a card can show whether the prompt
+// actually landed (the aggregate toast used to hide this). label -> {status, stage, at}.
+let BCAST = {};
+
+// One chip describing a delivery outcome. Keep it quiet for plain success; shout when skipped.
+function bcastChip(label){
+  const b = BCAST[label]; if (!b) return '';
+  if (Date.now() - b.at > 45000) return '';            // fade after ~45s; it's a transient signal
+  const M = {
+    started:        ['✅ running',   'var(--ok,#3ecf8e)', 'prompt accepted — turn is running'],
+    sent:           ['↵ sent',       'var(--ok,#3ecf8e)', 'prompt delivered (input box cleared)'],
+    'sent-unverified':['? unverified','#d9a441',          'keystrokes sent but text still in the input box — check it'],
+    skipped:        ['⏸ '+(b.stage==='trust'?'trust prompt':b.stage==='resume'?'resume picker':'busy'),
+                     '#d9a441', 'not at a ready prompt ('+(b.stage||'busy')+') — nothing was typed; open the window'],
+    gone:           ['✕ gone',       'var(--dim)',        'window no longer exists'],
+    error:          ['⚠ error',      '#e5484d',           'send failed'],
+  };
+  const m = M[b.status]; if (!m) return '';
+  return '<span class="chip" style="color:'+m[1]+';border-color:'+m[1]+'" title="'+esc(m[2])+'">'+esc(m[0])+'</span>';
+}
+function recordBcast(results){
+  const now = Date.now();
+  (results||[]).forEach(r => { if (r && r.label) BCAST[r.label] = { status:r.status, stage:r.stage, at:now }; });
+}
 
 const esc = (s)=> (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function statusMeta(k){ return (META.statuses||[]).find(s=>s.key===k) || { key:k, title:k, word:k, color:'#6a6a85' }; }
@@ -254,7 +280,7 @@ async function load() {
     const r = await fetch('/api/sessions?adapter='+encodeURIComponent(ADAPTER)+'&'+q);
     const j = await r.json();
     DATA = j.sessions;
-    if (j.statuses) META = { adapter:j.adapter, statuses:j.statuses, capabilities:j.capabilities };
+    if (j.statuses) META = { adapter:j.adapter, statuses:j.statuses, capabilities:j.capabilities, destructive:j.destructive||[], broadcastUi:j.broadcastUi||null };
     // Structure = which windows / status / managed. Time + last-action churn every few
     // seconds but DON'T change structure, so we update those in place and never rebuild the
     // DOM (which would wipe a reply you're typing). Only a real structural change rebuilds —
@@ -309,17 +335,27 @@ function claudeCard(s) {
       </div>
       <div class="label">\${esc(s.title || s.label)}</div>
       <div class="task">\${esc(s.lastAction || s.intent || '—')}</div>
-      <div class="cfoot">\${s.place ? '<span class="chip">'+esc(s.place)+'</span>' : ''}\${s.gitBranch ? '<span class="chip">'+esc(s.gitBranch)+'</span>' : ''}\${s.managed ? '<span class="mbadge">managed</span><button class="bopen" data-open="'+esc(s.mlabel)+'" title="Open this window in Terminal">↗ open</button>' : ''}</div>
+      <div class="cfoot">\${s.managed ? bcastChip(s.mlabel) : ''}\${s.place ? '<span class="chip">'+esc(s.place)+'</span>' : ''}\${s.gitBranch ? '<span class="chip">'+esc(s.gitBranch)+'</span>' : ''}\${s.managed ? '<span class="mbadge">managed</span><button class="bopen" data-open="'+esc(s.mlabel)+'" title="Open this window in Terminal">↗ open</button>' : ''}</div>
       \${ctrlHTML(s)}
     </div>\`;
 }
-// Fleet card: read-only observation + opt-in per-bot control (pause/resume/flatten). Flatten is
-// destructive → double-confirmed in fleetControl().
+// Human labels for control commands across every fleet adapter (trading bot / mev / validator).
+const CMD_LABEL = {
+  pause:'⏸ Pause', resume:'▶ Resume', flatten:'🛑 Flatten', kill:'⛔ Kill', unwind:'🧹 Unwind',
+  restart:'🔁 Restart', catchup:'⏩ Catch up', 'topup-identity':'💧 Top up', drain:'🚰 Drain',
+};
+// Fleet card: read-only observation + opt-in per-unit control. Buttons are generated from the
+// adapter's advertised capabilities; ones in META.destructive get the danger style and are
+// double-confirmed in fleetControl(). set-param needs a value, so it's driven via API, not a button.
 function fleetCard(s) {
   const sm = statusMeta(s.status);
   const chips = (s.context||[]).map(c=>'<span class="chip">'+esc(c)+'</span>').join('');
   const caps = META.capabilities || [];
-  const btn = (cmd,label,cls)=> caps.includes(cmd) ? '<button class="qb '+(cls||'')+'" data-bot="'+esc(s.id)+'" data-cmd="'+cmd+'">'+label+'</button>' : '';
+  const danger = new Set(META.destructive || []);
+  const btns = caps.filter(c=>CMD_LABEL[c]).map(cmd=>{
+    const cls = danger.has(cmd) ? ' danger' : '';
+    return '<button class="qb'+cls+'" data-bot="'+esc(s.id)+'" data-cmd="'+esc(cmd)+'">'+CMD_LABEL[cmd]+'</button>';
+  }).join('');
   return \`<div class="card \${s.status}" data-id="\${esc(s.id)}" style="--c:\${sm.color}">
       <div class="ctop">
         <span class="pill" style="--c:\${sm.color}"><i></i>\${statusLabel(s.status)}</span>
@@ -328,7 +364,7 @@ function fleetCard(s) {
       <div class="label">\${esc(s.title || s.label)}</div>
       <div class="task">\${esc(s.lastAction || s.intent || '—')}</div>
       <div class="cfoot">\${chips}</div>
-      <div class="ctrl"><div class="qbtns">\${btn('pause','⏸ Pause')}\${btn('resume','▶ Resume')}\${btn('flatten','🛑 Flatten','danger')}</div></div>
+      \${btns ? '<div class="ctrl"><div class="qbtns">'+btns+'</div></div>' : ''}
     </div>\`;
 }
 
@@ -343,7 +379,10 @@ async function reply(label, text) {
   try {
     const r = await fetch('/api/say', { method:'POST', headers:{'content-type':'application/json','x-conductor':'1'}, body:JSON.stringify({label, text}) });
     const j = await r.json();
-    toast(j.ok ? '→ sent “'+text+'” to '+label : 'send failed: '+(j.error||'?'));
+    recordBcast([{ label: j.label || label, status: j.ok ? (j.status||'sent') : (j.status||'error'), stage: j.stage }]);
+    if (j.ok) toast(j.status==='started' ? '✅ '+label+' is running it' : j.status==='sent-unverified' ? '? '+label+': sent but unconfirmed — check it' : '↵ sent to '+label);
+    else toast(j.status==='skipped' ? '⏸ '+label+' not ready ('+(j.stage||'busy')+') — nothing typed' : 'send failed: '+(j.error||j.status||'?'));
+    render();
   } catch(e) { toast('send failed'); }
 }
 async function replyAll(text) {
@@ -351,7 +390,11 @@ async function replyAll(text) {
   try {
     const r = await fetch('/api/say-all', { method:'POST', headers:{'content-type':'application/json','x-conductor':'1'}, body:JSON.stringify({text}) });
     const j = await r.json();
-    toast(j.ok ? '⚡ sent “'+text+'” to '+j.sent+' window'+(j.sent===1?'':'s') : 'broadcast failed');
+    if (!j.ok) { toast('broadcast failed'); return; }
+    recordBcast(j.results);
+    const n = j.total||0, ok = j.started||0, skip = j.skipped||0;
+    toast(skip ? '⚡ '+ok+'/'+n+' got it · '+skip+' skipped (see cards)' : '⚡ all '+ok+' window'+(ok===1?'':'s')+' got “'+text+'”');
+    render();   // paint the per-window chips immediately
   } catch(e) { toast('broadcast failed'); }
 }
 // reply to a plain (unmanaged) window: adopt it into tmux, then deliver the message there
@@ -403,12 +446,12 @@ async function openCLI(id) {
     else toast('open failed: '+(j.error||'?'));
   } catch(e) { toast('open failed'); }
 }
-// --- fleet control: per-bot pause/resume/flatten + desk-wide flatten ----------------------
+// --- fleet control: per-unit command + desk-wide broadcast --------------------------------
 async function fleetControl(bot, cmd) {
   let confirmTok;
-  if (cmd === 'flatten') {
-    if (!confirm('Flatten '+bot+'? This sends a market-flatten command to that bot.')) return;
-    confirmTok = 'flatten';
+  if ((META.destructive||[]).includes(cmd)) {
+    if (!confirm((CMD_LABEL[cmd]||cmd)+' '+bot+'?\\n\\nThis is a destructive command and cannot be undone.')) return;
+    confirmTok = cmd;
   }
   try {
     const r = await fetch('/api/control', { method:'POST', headers:{'content-type':'application/json','x-conductor':'1'},
@@ -417,16 +460,24 @@ async function fleetControl(bot, cmd) {
     toast(j.ok ? '→ '+cmd+' → '+bot : (cmd+' failed: '+(j.error||'?')));
   } catch(e) { toast(cmd+' failed'); }
 }
-async function deskFlatten() {
-  // destructive + desk-wide → double confirm, then a confirm token
-  if (!confirm('⚠ FLATTEN THE ENTIRE DESK?\\nEvery bot gets a market-flatten command.')) return;
-  if (!confirm('Are you absolutely sure? This affects ALL bots.')) return;
+// Desk-wide broadcast, driven by the adapter's broadcastUi hint. Dangerous broadcasts (fleet
+// flatten-all) double-confirm; benign ones (mev pause-all, validator report-all) confirm once.
+// Always carries a confirm token (the server treats every broadcast as confirm-gated).
+async function deskBroadcast(cmd, danger) {
+  if (danger) {
+    if (!confirm('⚠ Broadcast '+cmd+' to the ENTIRE fleet?\\nEvery unit gets the command.')) return;
+    if (!confirm('Are you absolutely sure? This affects ALL units.')) return;
+  } else {
+    if (!confirm('Broadcast '+cmd+' to every unit?')) return;
+  }
   try {
     const r = await fetch('/api/broadcast', { method:'POST', headers:{'content-type':'application/json','x-conductor':'1'},
-      body:JSON.stringify({ adapter:ADAPTER, command:{cmd:'flatten'}, confirm:'flatten' }) });
+      body:JSON.stringify({ adapter:ADAPTER, command:{cmd}, confirm:cmd }) });
     const j = await r.json();
-    toast(j.ok ? '🛑 flatten sent to '+j.sent+'/'+j.total+' bots' : 'flatten failed: '+(j.error||'?'));
-  } catch(e) { toast('flatten failed'); }
+    if (!j.ok) { toast(cmd+' failed: '+(j.error||'?')); return; }
+    if (j.report) toast('🔄 report → '+(j.units?j.units.length:0)+' units');
+    else toast('→ '+cmd+' sent to '+(j.sent||0)+'/'+(j.total||0)+' units');
+  } catch(e) { toast(cmd+' failed'); }
 }
 
 // Adapt the header + broadcast bar to the active adapter. Claude keeps its "prompt all managed"
@@ -439,12 +490,17 @@ function setupChrome() {
   if (ADAPTER !== 'claude-code') {
     const nb = document.getElementById('newbtn'); if (nb) nb.style.display='none';
     const bc = document.getElementById('bcast');
-    bc.classList.add('fleet');
-    bc.innerHTML = '<span class="blabel">🛑 Desk-wide</span>'
-      + '<div class="bbtns"><button class="qb danger" id="flattenAll">Flatten all bots</button></div>'
-      + '<span style="color:var(--dim);font-size:11px">read-only observation · opt-in control</span>';
-    bc.style.display = 'flex';
-    document.getElementById('flattenAll').addEventListener('click', deskFlatten);
+    const ui = META.broadcastUi;
+    if (ui) {
+      if (ui.danger) bc.classList.add('fleet');
+      bc.innerHTML = '<span class="blabel">'+(ui.danger?'🛑':'⚡')+' Desk-wide</span>'
+        + '<div class="bbtns"><button class="qb'+(ui.danger?' danger':'')+'" id="deskBtn">'+esc(ui.label)+'</button></div>'
+        + '<span style="color:var(--dim);font-size:11px">read-only observation · opt-in control</span>';
+      bc.style.display = 'flex';
+      document.getElementById('deskBtn').addEventListener('click', ()=>deskBroadcast(ui.cmd, !!ui.danger));
+    } else {
+      bc.style.display = 'none';
+    }
   } else {
     // build claude broadcast quick-buttons once
     document.getElementById('bbtns').innerHTML = QUICK.map(q => '<button class="qb" data-all="'+esc(q[1])+'">'+q[0]+'</button>').join('');
@@ -596,8 +652,15 @@ function writeAllowed(req) {
   return localHost(req) && localOrigin(req) && req.headers['x-conductor'] === '1';
 }
 // Commands that move real money / state and must carry an explicit confirm token (the UI also
-// double-confirms). broadcast is always treated as destructive regardless of command.
-const DESTRUCTIVE = new Set(['flatten']);
+// double-confirms). Each adapter declares its own destructive set (control.destructive); the
+// cockpit honors it as a second gate on top of the adapter's own check (defense in depth).
+// broadcast is always treated as destructive regardless of command.
+function destructiveSet(a) {
+  const d = a && a.control && a.control.destructive;
+  if (d instanceof Set) return d;
+  if (Array.isArray(d)) return new Set(d);
+  return new Set(['flatten']);   // legacy fallback
+}
 // Drive a freshly launched/adopted window from boot to "ready" and deliver the reply once the
 // prompt box is up. Shared with the MCP control tools — see manage.deliverAdopted.
 const deliverAdopted = manage.deliverAdopted;
@@ -631,7 +694,7 @@ async function handle(req, res) {
         rows = await engine.collect(activeAdapter(), { minutes, all });
       }
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-      res.end(JSON.stringify({ generatedAt: new Date().toISOString(), adapter: meta.adapter, statuses: meta.statuses, capabilities: meta.capabilities, count: rows.length, sessions: rows }));
+      res.end(JSON.stringify({ generatedAt: new Date().toISOString(), adapter: meta.adapter, statuses: meta.statuses, capabilities: meta.capabilities, destructive: meta.destructive, broadcastUi: meta.broadcastUi, count: rows.length, sessions: rows }));
     } catch (e) {
       res.writeHead(500, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: e.message }));
@@ -647,10 +710,12 @@ async function handle(req, res) {
       if (!a.control || typeof a.control.send !== 'function') return sendJSON(res, 400, { ok: false, error: 'adapter has no control plane' });
       const command = p.command || {};
       if (!a.control.capabilities.includes(command.cmd)) return sendJSON(res, 400, { ok: false, error: 'unknown command' });
-      if (DESTRUCTIVE.has(command.cmd) && p.confirm !== command.cmd) {
+      if (destructiveSet(a).has(command.cmd) && p.confirm !== command.cmd) {
         return sendJSON(res, 400, { ok: false, error: `"${command.cmd}" is destructive — confirm token required` });
       }
-      try { sendJSON(res, 200, a.control.send(p.target, command)); }
+      // Forward the validated token so an adapter that gates this command (validator gates every
+      // capability; mev gates unwind) sees the confirm it requires.
+      try { sendJSON(res, 200, a.control.send(p.target, p.confirm ? { ...command, confirm: p.confirm } : command)); }
       catch (e) { sendJSON(res, 400, { ok: false, error: e.message }); }
     });
     return;
@@ -662,7 +727,12 @@ async function handle(req, res) {
       const a = activeAdapter();
       if (!a.control || typeof a.control.broadcast !== 'function') return sendJSON(res, 400, { ok: false, error: 'adapter has no broadcast' });
       const command = p.command || {};
-      if (!a.control.capabilities.includes(command.cmd)) return sendJSON(res, 400, { ok: false, error: 'unknown command' });
+      // The broadcast vocabulary isn't always a per-unit capability: a validator's only desk-wide
+      // op is the non-mutating "report", which is deliberately NOT a control capability. Accept a
+      // command that's either a capability or the adapter's advertised broadcastUi command; the
+      // adapter's own broadcast() is the final authority and refuses anything destructive.
+      const bcCmd = a.control.broadcastUi && a.control.broadcastUi.cmd;
+      if (!a.control.capabilities.includes(command.cmd) && command.cmd !== bcCmd) return sendJSON(res, 400, { ok: false, error: 'unknown command' });
       if (p.confirm !== command.cmd) return sendJSON(res, 400, { ok: false, error: 'broadcast requires a confirm token' });
       // Forward the validated token so the adapter's own destructive gate (defense in depth) passes.
       try { sendJSON(res, 200, a.control.broadcast({ ...command, confirm: p.confirm })); }
@@ -673,7 +743,9 @@ async function handle(req, res) {
 
   if (url.pathname === '/api/say' && req.method === 'POST') {
     readBody(req, res, (p) => {
-      const r = p.key ? manage.key(p.label, p.key) : manage.say(p.label, p.text || '');
+      // deliver() gates on readiness + confirms the prompt landed (returns a status the UI chips);
+      // key sends stay raw (interrupt must fire regardless of pane state).
+      const r = p.key ? manage.key(p.label, p.key) : manage.deliver(p.label, p.text || '');
       sendJSON(res, r.ok ? 200 : 400, r);
     });
     return;

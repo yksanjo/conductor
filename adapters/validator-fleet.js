@@ -274,6 +274,8 @@ function send(target, command = {}) {
 const control = {
   capabilities: CAPS,
   destructive: CAPS.slice(),   // all of them
+  // Cockpit hint: the only desk-wide action is a non-mutating refresh/report — never restart-all.
+  broadcastUi: { cmd: 'report', label: '🔄 Refresh — report all', danger: false },
   send,
   // broadcast is read-only: a non-mutating "report" at most. A destructive op can never be broadcast.
   broadcast(command = {}) {

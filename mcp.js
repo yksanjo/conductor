@@ -58,8 +58,10 @@ async function replyToSession(ref, text) {
   const existing = (s && managedBySession[s.sessionId])
     || manage.listManaged().find((w) => w.label === manage.sanitize(ref));
   if (existing) {
-    const r = manage.say(existing.label, text);
-    return r.ok ? { ok: true, label: existing.label, adopted: false } : r;
+    const r = manage.deliver(existing.label, text);   // gated + confirmed; reports if it wasn't ready
+    if (r.ok) return { ok: true, label: existing.label, adopted: false, status: r.status };
+    if (r.status === 'skipped') return { ok: false, label: existing.label, error: `window "${existing.label}" isn't at a ready prompt (${r.stage}) — nothing was sent; open it and clear the ${r.stage} prompt, then retry.` };
+    return r;
   }
   if (!s) return { ok: false, error: `no session matched "${ref}" — try list_sessions or widen the time window.` };
   const label = manage.uniqueLabel(s.label || s.shortId, s.sessionId);

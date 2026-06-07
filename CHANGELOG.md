@@ -1,7 +1,22 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
 
+- **Honest broadcast delivery — you can now see, per window, whether a prompt actually landed.**
+  Broadcasting ("prompt all managed") and single replies used to report success off the tmux
+  `send-keys` exit code, which only proves keystrokes were delivered — not that Claude accepted
+  them. On a CLI window sitting at the folder-trust prompt, the resume picker, or a busy/compacting
+  state, the text was typed into the wrong place and the toast still said "sent to N windows."
+  - **`manage.deliver(label, text)`** replaces the raw `say()` in the broadcast/reply path. It
+    refuses to type unless `paneStage` is `ready` (otherwise returns `{status:'skipped', stage}`),
+    then reads the pane back to classify the result: `started` (turn visibly running),
+    `sent` (input box cleared), or `sent-unverified` (text still sitting in the box).
+  - **`sayAll()` returns a per-window breakdown** (`results[]` + `started`/`skipped`/`total`)
+    instead of a single count. `/api/say` and the MCP `reply_to_session` route through `deliver`
+    too, so both surfaces report when a window wasn't ready rather than failing silently.
+  - **Cockpit shows it.** Each managed card paints a status chip after a broadcast/reply
+    (✅ running · ↵ sent · ? unverified · ⏸ trust prompt/busy · ✕ gone), and the broadcast toast
+    summarizes "N/M got it · K skipped (see cards)". Chips fade after ~45s.
 - **Two more adapters — `mev-searcher` and `validator-fleet`.** Both supervise crypto-native fleets
   by exception, extending the engine with no surface changes.
   - **`adapters/mev-searcher.js`** — a MEV / liquidation searcher fleet reading
@@ -20,8 +35,15 @@
     `fleet.js` + `mev-searcher.js` both import it. Each adapter ships a no-mock test
     (`adapters/mev-searcher.test.js`, `adapters/validator-fleet.test.js` — the latter against a stub
     RPC server); `npm test` stays green across all adapters + the cockpit guard. README gains the
-    supported-adapters table and the four-ingredient fit test. *Cockpit wiring of the new control
-    planes is intentionally deferred pending review.*
+    supported-adapters table and the four-ingredient fit test.
+  - **Cockpit wired for every adapter.** The web cockpit is now data-driven: per-unit control
+    buttons are generated from each adapter's advertised capabilities, commands in
+    `control.destructive` get the danger style + a double-confirm, and the desk-wide band is built
+    from an adapter `broadcastUi` hint (fleet → flatten-all *danger*; mev → pause-all; validator →
+    a non-mutating report/refresh). The server's destructive gate now reads `adapter.control.
+    destructive` instead of a hardcoded `flatten`, and forwards the validated confirm token to the
+    adapter's own gate (defense in depth) — so `mev unwind` and every gated `validator` op are
+    confirm-required end to end, while `validator broadcast` is limited to the non-mutating report.
 
 - **Close a window from the cockpit** — managed cards now carry an **✕ close** button next to
   **↗ open**. It kills the window's tmux session (the same thing `conductor stop <label>` does).

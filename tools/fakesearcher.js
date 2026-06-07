@@ -89,7 +89,6 @@ function scenario(name, kind, now) {
       [2 * MIN, 'l2', 0.31, 0.03, 0.01, 'Orca'],
       [70 * SEC, 'l3', 0.55, 0.05, 0.01, 'Kamino'],
     ];
-    let t = 3 * MIN + 20 * SEC;
     for (const [ago, id, pnl, tip, g, proto] of lands) {
       ev.push({ ts: at(ago + 8 * SEC), type: 'opportunity', kind: 'arb', est: pnl + tip, route: proto });
       ev.push({ ts: at(ago + 5 * SEC), type: 'bundle', id, tip });
@@ -102,7 +101,6 @@ function scenario(name, kind, now) {
     ev.push({ ts: at(40 * SEC), type: 'submit', id: 'l4' });
     ev.push({ ts: at(38 * SEC), type: 'revert', id: 'l4', cost: 0.01 });
     ev.push({ ts: at(6 * SEC), type: 'heartbeat' });
-    void t;
     return { meta, ev };
   }
 

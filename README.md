@@ -3,6 +3,8 @@
 **Supervisory awareness across a fleet of semi-autonomous workers — starting with your live
 Claude Code sessions.**
 
+![Conductor — run one command, see every Claude Code window grouped by status](docs/demo.gif)
+
 Conductor is a source-agnostic supervisory core with a pluggable **adapter** interface. The
 engine owns grouping, status ranking, sectioning, and the three surfaces (CLI table, web
 cockpit, MCP server); an adapter owns where the trails live and how to read them. Claude Code is

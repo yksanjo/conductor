@@ -153,16 +153,61 @@ function paneStage(label) {
 // adopting a window to continue it wants — the summary default kicks off a slow /compact.
 function resumeFull(label) { key(label, 'Down'); return key(label, 'Enter'); }
 
-// Broadcast one reply (or key) to every managed window at once.
+// Broadcast one reply (or key) to every managed window at once. Text broadcasts go through
+// deliver() so each window is gated on readiness and confirmed after sending — the result
+// carries a per-window breakdown the cockpit renders as status chips, instead of one
+// aggregate count that lied (tmux exit 0 ≠ Claude accepted the prompt). Key broadcasts
+// (interrupt/panic) are intentional control signals and fire into every pane regardless.
 function sayAll(payload) {
   payload = payload || {};
   const ws = listManaged();
-  let sent = 0;
+  const results = [];
   for (const w of ws) {
-    const r = payload.key ? key(w.label, payload.key) : say(w.label, payload.text || '');
-    if (r.ok) sent++;
+    if (payload.key) {
+      const r = key(w.label, payload.key);
+      results.push({ label: w.label, status: r.ok ? 'started' : 'error', error: r.error });
+    } else {
+      results.push(deliver(w.label, payload.text || ''));
+    }
   }
-  return { ok: true, sent, total: ws.length };
+  const started = results.filter((r) => r.status === 'started' || r.status === 'sent').length;
+  const skipped = results.filter((r) => r.status === 'skipped' || r.status === 'gone').length;
+  // `sent` kept for backward-compat (old toast / adapter): it now means "actually delivered".
+  return { ok: true, sent: started, started, skipped, total: ws.length, results };
+}
+
+function escRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+// Send a reply to ONE managed window, honestly. Unlike say() (a raw keystroke pump), deliver()
+//   1. refuses to type unless the pane is at a ready prompt — typing into the folder-trust
+//      prompt, the resume picker, or a busy/compacting pane is exactly how a broadcast silently
+//      lands in the wrong place; those come back as {status:'skipped', stage} so the UI can flag
+//      "⚠ trust prompt" / "⏸ busy" on that card instead of claiming success.
+//   2. reads the pane back after sending to confirm Claude took the prompt:
+//      'started'        = the turn is visibly running (esc-to-interrupt / compacting),
+//      'sent'           = input box cleared (accepted) but no running indicator (fast turn),
+//      'sent-unverified'= keystrokes delivered but the text is still sitting in the input box.
+// Returns a per-window record; ok is true only when the prompt was actually delivered.
+function deliver(label, text) {
+  if (!hasTmux()) return { ok: false, label: sanitize(label), status: 'error', error: 'tmux not installed' };
+  const name = sanitize(label);
+  if (!windowAlive(name)) return { ok: false, label: name, status: 'gone' };
+  const stage = paneStage(name);
+  if (stage !== 'ready') return { ok: false, label: name, status: stage === 'gone' ? 'gone' : 'skipped', stage };
+
+  tmux(['send-keys', '-t', target(name), '-l', '--', String(text)]);
+  const r = tmux(['send-keys', '-t', target(name), 'Enter']);
+  if (r.code !== 0) return { ok: false, label: name, status: 'error', stage: 'ready', error: r.err };
+
+  // Read the pane back: did the prompt actually take?
+  spawnSync('sleep', ['0.4']);
+  const after = tmux(['capture-pane', '-p', '-t', target(name)]);
+  const screen = after.code === 0 ? after.out : '';
+  const running = /esc to interrupt|Compacting conversation/i.test(screen);
+  const chunk = String(text).trim().slice(0, 40);
+  const lingering = chunk && new RegExp('[>❯|]\\s*' + escRe(chunk)).test(screen); // still in the input box
+  const status = running ? 'started' : (lingering ? 'sent-unverified' : 'sent');
+  return { ok: true, label: name, status, stage: 'ready' };
 }
 
 // Send a short reply (literal text + Enter). Reply text is passed as an arg, never shelled.
@@ -294,4 +339,4 @@ function managedBySession() {
   return map;
 }
 
-module.exports = { run, adopt, uniqueLabel, say, sayAll, key, stop, openTerminal, listManaged, managedBySession, attachCommand, trustPromptShowing, paneStage, resumeFull, answerTrust, deliverAdopted, sanitize, hasTmux, SESSION, REG_FILE };
+module.exports = { run, adopt, uniqueLabel, say, deliver, sayAll, key, stop, openTerminal, listManaged, managedBySession, attachCommand, trustPromptShowing, paneStage, resumeFull, answerTrust, deliverAdopted, sanitize, hasTmux, SESSION, REG_FILE };
