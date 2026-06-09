@@ -13,63 +13,22 @@
 // Observation is read-only. Control is opt-in: commands are appended to
 //   ~/.fleet/bots/<bot>/control.jsonl
 // which the bot itself polls. Capabilities: pause | resume | flatten | set-param.
-// broadcast('flatten') is the desk-wide panic flatten.
+// broadcast('flatten') is the desk-wide panic flatten (the cockpit gates it behind a confirm token).
 //
-// The fleet root is ~/.fleet, overridable with FLEET_DIR (used by the tests).
+// The append-only-trail plumbing (discover / tail / stream / control-write) is shared with the
+// MEV-searcher adapter via ./_filetrail; only the domain parsing below is bot-specific.
 
-const fs = require('fs');
 const path = require('path');
-const os = require('os');
-const readline = require('readline');
+const ft = require('./_filetrail');
 const { clip, prettify } = require('../util');
 
+const KIND = 'bots';
 const LIVE_MINUTES = 2;       // a bot is "live" if it emitted anything within this window
 const WEDGE_MINUTES = 5;      // an order/signal with no fill older than this = wedged
 const DRAWDOWN_PCT = 0.1;     // equity off its peak by this fraction = drawdown signal
 const RING = 12;              // recent non-heartbeat events surfaced per bot
 
-function fleetRoot() { return process.env.FLEET_DIR || path.join(os.homedir(), '.fleet'); }
-function botsDir() { return path.join(fleetRoot(), 'bots'); }
-function botName(handle) { return path.basename(path.dirname(handle)); }
-function safeBot(name) { return /^[A-Za-z0-9_.-]+$/.test(String(name)); }
-
-// ---------------------------------------------------------------------------
-// Reading trails
-// ---------------------------------------------------------------------------
-
-// Read just the tail of a file (last `bytes`) and return the parsed complete JSON lines. Used by
-// liveness so we never stream a whole large log just to learn its newest timestamp.
-function tailRecords(file, bytes = 8192) {
-  let fd;
-  try {
-    fd = fs.openSync(file, 'r');
-    const size = fs.fstatSync(fd).size;
-    const len = Math.min(size, bytes);
-    const buf = Buffer.alloc(len);
-    fs.readSync(fd, buf, 0, len, size - len);
-    let text = buf.toString('utf8');
-    if (len < size) text = text.slice(text.indexOf('\n') + 1); // drop the partial first line
-    const out = [];
-    for (const line of text.split('\n')) {
-      if (!line.trim()) continue;
-      try { out.push(JSON.parse(line)); } catch { /* skip */ }
-    }
-    return out;
-  } catch { return []; }
-  finally { if (fd != null) try { fs.closeSync(fd); } catch { /* ignore */ } }
-}
-
-function readMeta(dir) {
-  try { return JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')); }
-  catch { return {}; }
-}
-
-function tsOf(r) {
-  if (r == null) return NaN;
-  if (typeof r.ts === 'number') return r.ts;
-  const t = Date.parse(r.ts);
-  return isNaN(t) ? NaN : t;
-}
+function tsOf(r) { return ft.tsOf(r); }
 
 function sideSign(side) {
   const s = String(side || '').toLowerCase();
@@ -101,40 +60,18 @@ function describe(ev) {
 // Adapter contract
 // ---------------------------------------------------------------------------
 
-function listBots() {
-  let entries;
-  try { entries = fs.readdirSync(botsDir(), { withFileTypes: true }); }
-  catch { return []; }
-  return entries.filter((e) => e.isDirectory() && safeBot(e.name)).map((e) => e.name);
-}
-
-function discover() {
-  const out = [];
-  for (const bot of listBots()) {
-    const file = path.join(botsDir(), bot, 'events.jsonl');
-    if (fs.existsSync(file)) out.push(file);
-  }
-  return out;
-}
+function listBots() { return ft.listUnits(KIND); }
+function discover() { return ft.discover(KIND); }
 
 function liveness(handles, opts = {}) {
-  const liveMs = (opts.liveMinutes || LIVE_MINUTES) * 60000;
-  const now = Date.now();
-  const live = new Set();
-  for (const h of handles) {
-    const tail = tailRecords(h);
-    let newest = 0;
-    for (const r of tail) { const t = tsOf(r); if (!isNaN(t) && t > newest) newest = t; }
-    if (newest && (now - newest) <= liveMs) live.add(h);
-  }
-  return live;
+  return ft.liveness(handles, (opts.liveMinutes || LIVE_MINUTES) * 60000);
 }
 
 async function parse(handle, opts = {}) {
   const dir = path.dirname(handle);
-  const bot = botName(handle);
-  if (!safeBot(bot)) return null;
-  const meta = readMeta(dir);
+  const bot = ft.unitName(handle);
+  if (!ft.safeName(bot)) return null;
+  const meta = ft.readMeta(dir);
 
   const s = {
     lastTs: 0, lastFillTs: 0, lastOrderSignalTs: 0,
@@ -142,47 +79,35 @@ async function parse(handle, opts = {}) {
     recent: [], lastMeaningful: null, lastOrderSignal: null,
   };
 
-  await new Promise((resolve) => {
-    let stream;
-    try { stream = fs.createReadStream(handle, { encoding: 'utf8' }); }
-    catch { return resolve(); }
-    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-    rl.on('line', (line) => {
-      if (!line.trim()) return;
-      let ev; try { ev = JSON.parse(line); } catch { return; }
-      if (!ev || typeof ev !== 'object') return;
-      const t = tsOf(ev);
-      if (!isNaN(t) && t > s.lastTs) s.lastTs = t;
-      switch (ev.type) {
-        case 'fill': {
-          s.position += sideSign(ev.side) * (Number(ev.qty) || 0);
-          if (!isNaN(t)) s.lastFillTs = Math.max(s.lastFillTs, t);
-          break;
-        }
-        case 'order':
-        case 'signal':
-          if (!isNaN(t) && t >= s.lastOrderSignalTs) { s.lastOrderSignalTs = t; s.lastOrderSignal = ev; }
-          break;
-        case 'pnl': {
-          s.sessionPnl = ev.pnl != null ? ev.pnl : (ev.realized || 0) + (ev.unrealized || 0);
-          if (ev.equity != null) {
-            s.equity = ev.equity;
-            s.peakEquity = s.peakEquity == null ? ev.equity : Math.max(s.peakEquity, ev.equity);
-          }
-          break;
-        }
-        case 'heartbeat': break;
-        case 'error': break;
-        default: break;
+  await ft.streamEvents(handle, (ev, t) => {
+    if (!isNaN(t) && t > s.lastTs) s.lastTs = t;
+    switch (ev.type) {
+      case 'fill': {
+        s.position += sideSign(ev.side) * (Number(ev.qty) || 0);
+        if (!isNaN(t)) s.lastFillTs = Math.max(s.lastFillTs, t);
+        break;
       }
-      if (ev.type !== 'heartbeat') {
-        s.lastMeaningful = ev;
-        s.recent.push({ actor: 'bot', kind: ev.type, summary: describe(ev), ts: isNaN(t) ? 0 : t });
-        if (s.recent.length > RING) s.recent.shift();
+      case 'order':
+      case 'signal':
+        if (!isNaN(t) && t >= s.lastOrderSignalTs) { s.lastOrderSignalTs = t; s.lastOrderSignal = ev; }
+        break;
+      case 'pnl': {
+        s.sessionPnl = ev.pnl != null ? ev.pnl : (ev.realized || 0) + (ev.unrealized || 0);
+        if (ev.equity != null) {
+          s.equity = ev.equity;
+          s.peakEquity = s.peakEquity == null ? ev.equity : Math.max(s.peakEquity, ev.equity);
+        }
+        break;
       }
-    });
-    rl.on('error', resolve);
-    rl.on('close', resolve);
+      case 'heartbeat': break;
+      case 'error': break;
+      default: break;
+    }
+    if (ev.type !== 'heartbeat') {
+      s.lastMeaningful = ev;
+      s.recent.push({ actor: 'bot', kind: ev.type, summary: describe(ev), ts: isNaN(t) ? 0 : t });
+      if (s.recent.length > RING) s.recent.shift();
+    }
   });
 
   if (!s.lastTs && !s.recent.length) return null; // empty trail
@@ -243,28 +168,35 @@ const statuses = [
 ];
 
 // ---------------------------------------------------------------------------
-// Control — append commands the bot polls. Bot names are validated (no traversal); commands are
-// written as structured JSON, never interpolated into a shell.
+// Control — append commands the bot polls (via the shared file-trail writer). Bot names are
+// validated (no traversal); commands are written as structured JSON, never interpolated into a
+// shell. `flatten` is money-moving → destructive: it requires a confirm token (command.confirm ===
+// 'flatten') AT THE ADAPTER LAYER, independent of the cockpit's own guard, so flatten is gated even
+// when driven directly (MCP / script / test) — matching mev/validator's defense in depth. Unlike
+// those adapters, fleet DOES let flatten be broadcast (the desk-wide panic-flatten is the marquee
+// feature), but the broadcast must carry the same confirm token, which the cockpit double-confirms.
 // ---------------------------------------------------------------------------
 const CAPS = ['pause', 'resume', 'flatten', 'set-param'];
+const DESTRUCTIVE = new Set(['flatten']);
 
 function writeControl(bot, command = {}) {
-  if (!safeBot(bot)) return { ok: false, error: `invalid bot name "${bot}"` };
-  const cmd = command.cmd;
-  if (!CAPS.includes(cmd)) return { ok: false, error: `unknown command "${cmd}" (capabilities: ${CAPS.join(', ')})` };
-  const dir = path.join(botsDir(), bot);
-  if (!fs.existsSync(dir)) return { ok: false, error: `no such bot "${bot}"` };
-  const rec = { ts: Date.now(), ...command };
-  try {
-    fs.appendFileSync(path.join(dir, 'control.jsonl'), JSON.stringify(rec) + '\n');
-    return { ok: true, bot, command: rec };
-  } catch (e) { return { ok: false, error: e.message }; }
+  const r = ft.writeControl(KIND, bot, command, { caps: CAPS, destructive: DESTRUCTIVE });
+  if (!r.ok) return { ok: false, error: r.error };
+  return { ok: true, bot: r.unit, command: r.command };
 }
 
 const control = {
   capabilities: CAPS,
+  destructive: Array.from(DESTRUCTIVE),
+  // Cockpit hint for the desk-wide band: which broadcast this fleet offers + whether it's dangerous.
+  broadcastUi: { cmd: 'flatten', label: '🛑 Flatten all bots', danger: true },
   send(target, command) { return writeControl(target, command); },
-  broadcast(command) {
+  broadcast(command = {}) {
+    // The desk-wide panic-flatten is allowed, but a destructive broadcast must carry the confirm
+    // token just like a single send — so a stray broadcast() can't flatten the whole desk ungated.
+    if (DESTRUCTIVE.has(command.cmd) && command.confirm !== command.cmd) {
+      return { ok: false, error: `"${command.cmd}" cannot be broadcast without a confirm token` };
+    }
     const bots = listBots();
     let sent = 0; const errors = [];
     for (const b of bots) { const r = writeControl(b, command); if (r.ok) sent++; else errors.push(b); }
@@ -272,4 +204,4 @@ const control = {
   },
 };
 
-module.exports = { discover, liveness, parse, status, statuses, control, listBots, fleetRoot };
+module.exports = { discover, liveness, parse, status, statuses, control, listBots, fleetRoot: ft.fleetRoot };

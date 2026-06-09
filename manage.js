@@ -153,16 +153,73 @@ function paneStage(label) {
 // adopting a window to continue it wants — the summary default kicks off a slow /compact.
 function resumeFull(label) { key(label, 'Down'); return key(label, 'Enter'); }
 
-// Broadcast one reply (or key) to every managed window at once.
+// Settle delay between firing a prompt and reading the pane back to see if the turn started.
+const CONFIRM_MS = 350;
+
+// Phase 1 of a verified send: gate on readiness and fire the keystrokes, but DON'T wait. Returns a
+// record whose status is 'pending' when the text was delivered to a ready prompt (the caller
+// confirms it later), or 'skipped'/'gone'/'error' when it wasn't. Splitting send from confirm lets
+// sayAll fire every window first and settle ONCE — instead of paying the confirm delay per window,
+// which froze the single-threaded server for ~CONFIRM_MS × (window count) on every broadcast.
+function sendIfReady(label, text) {
+  if (!hasTmux()) return { ok: false, label: sanitize(label), status: 'error', error: 'tmux not installed' };
+  const name = sanitize(label);
+  if (!windowAlive(name)) return { ok: false, label: name, status: 'gone' };
+  const stage = paneStage(name);
+  // Typing into the folder-trust prompt, the resume picker, or a busy/compacting pane is exactly
+  // how a broadcast silently lands in the wrong place — refuse, and report the stage so the cockpit
+  // can flag "⏸ trust prompt" / "busy" on that card instead of claiming success.
+  if (stage !== 'ready') return { ok: false, label: name, status: stage === 'gone' ? 'gone' : 'skipped', stage };
+  tmux(['send-keys', '-t', target(name), '-l', '--', String(text)]);
+  const r = tmux(['send-keys', '-t', target(name), 'Enter']);
+  if (r.code !== 0) return { ok: false, label: name, status: 'error', stage: 'ready', error: r.err };
+  return { ok: true, label: name, status: 'pending', stage: 'ready' };
+}
+
+// Phase 2: read the pane back and upgrade a 'pending' record to 'started' (the turn is visibly
+// running) or 'sent' (delivered to a ready prompt; a fast turn may already be done). We deliberately
+// do NOT try to detect "text still sitting in the input box" — Claude echoes the submitted message
+// into the transcript with a '>' prefix, indistinguishable from an unsent input line, so that check
+// only produced false "unverified" alarms on prompts that were actually accepted.
+function confirmDelivery(rec) {
+  if (!rec || rec.status !== 'pending') return rec;
+  const after = tmux(['capture-pane', '-p', '-t', target(rec.label)]);
+  const running = after.code === 0 && /esc to interrupt|Compacting conversation/i.test(after.out);
+  return { ...rec, status: running ? 'started' : 'sent' };
+}
+
+// Send a reply to ONE managed window, honestly: gate on readiness (sendIfReady), then confirm the
+// turn took (confirmDelivery). Unlike say() (a raw keystroke pump), ok is true only when the prompt
+// was delivered to a ready prompt; otherwise status is 'skipped'/'gone'/'error' with the stage.
+function deliver(label, text) {
+  const rec = sendIfReady(label, text);
+  if (rec.status !== 'pending') return rec;
+  spawnSync('sleep', [String(CONFIRM_MS / 1000)]);
+  return confirmDelivery(rec);
+}
+
+// Broadcast one reply (or key) to every managed window at once. Text broadcasts fire into every
+// ready window first, then settle ONCE before confirming — so the result carries a per-window
+// breakdown the cockpit renders as status chips, without the count that used to lie (tmux exit 0 ≠
+// Claude accepted the prompt) and without an O(n) stack of confirm delays. Key broadcasts
+// (interrupt/panic) are intentional control signals and fire into every pane regardless of stage.
 function sayAll(payload) {
   payload = payload || {};
   const ws = listManaged();
-  let sent = 0;
-  for (const w of ws) {
-    const r = payload.key ? key(w.label, payload.key) : say(w.label, payload.text || '');
-    if (r.ok) sent++;
+  let results;
+  if (payload.key) {
+    results = ws.map((w) => { const r = key(w.label, payload.key); return { ok: r.ok, label: w.label, status: r.ok ? 'sent' : 'error', error: r.error }; });
+  } else {
+    results = ws.map((w) => sendIfReady(w.label, payload.text || ''));   // fire all — no per-window wait
+    if (results.some((r) => r.status === 'pending')) {
+      spawnSync('sleep', [String(CONFIRM_MS / 1000)]);                   // settle ONCE for the whole batch
+      results = results.map(confirmDelivery);
+    }
   }
-  return { ok: true, sent, total: ws.length };
+  const started = results.filter((r) => r.status === 'started' || r.status === 'sent').length;
+  const skipped = results.filter((r) => r.status === 'skipped' || r.status === 'gone').length;
+  // `sent` kept for backward-compat (old toast / adapter): it now means "actually delivered".
+  return { ok: true, sent: started, started, skipped, total: ws.length, results };
 }
 
 // Send a short reply (literal text + Enter). Reply text is passed as an arg, never shelled.
@@ -294,4 +351,4 @@ function managedBySession() {
   return map;
 }
 
-module.exports = { run, adopt, uniqueLabel, say, sayAll, key, stop, openTerminal, listManaged, managedBySession, attachCommand, trustPromptShowing, paneStage, resumeFull, answerTrust, deliverAdopted, sanitize, hasTmux, SESSION, REG_FILE };
+module.exports = { run, adopt, uniqueLabel, say, deliver, sayAll, key, stop, openTerminal, listManaged, managedBySession, attachCommand, trustPromptShowing, paneStage, resumeFull, answerTrust, deliverAdopted, sanitize, hasTmux, SESSION, REG_FILE };

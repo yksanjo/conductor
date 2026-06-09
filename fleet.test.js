@@ -100,9 +100,21 @@ function makeBot(name, sc) {
   const traversal = fleet.control.send('../../etc', { cmd: 'flatten' });
   ok('control rejects a path-traversal bot name', traversal.ok === false);
 
-  // --- broadcast: desk-wide panic flatten reaches every bot ---
-  const bc = fleet.control.broadcast({ cmd: 'flatten' });
-  ok('broadcast(flatten) hits all bots', bc.ok && bc.sent === 4 && bc.total === 4);
+  // --- destructive gate: flatten is money-moving → confirm token required AT THE ADAPTER LAYER,
+  // so it's gated even when driven directly (MCP / script), not just via the cockpit ---
+  ok('flatten advertised as destructive', fleet.control.destructive.includes('flatten'));
+  const flatNoTok = fleet.control.send('alpha-momentum', { cmd: 'flatten' });
+  ok('control.send(flatten) WITHOUT confirm token → rejected', flatNoTok.ok === false);
+  const flatTok = fleet.control.send('alpha-momentum', { cmd: 'flatten', confirm: 'flatten' });
+  ok('control.send(flatten) WITH confirm token → ok', flatTok.ok === true);
+  const ctrlAfter = fs.readFileSync(ctrlFile, 'utf8');
+  ok('persisted flatten command never stores the confirm token', !/"confirm"/.test(ctrlAfter));
+
+  // --- broadcast: desk-wide panic flatten reaches every bot, but still needs the token ---
+  const bcNoTok = fleet.control.broadcast({ cmd: 'flatten' });
+  ok('broadcast(flatten) WITHOUT confirm token → rejected', bcNoTok.ok === false);
+  const bc = fleet.control.broadcast({ cmd: 'flatten', confirm: 'flatten' });
+  ok('broadcast(flatten) WITH token hits all bots', bc.ok && bc.sent === 4 && bc.total === 4);
   const flattenedEverywhere = ['alpha-momentum', 'beta-revert', 'gamma-breakout', 'delta-scalp'].every((b) => {
     const f = path.join(root, 'bots', b, 'control.jsonl');
     return fs.existsSync(f) && /"cmd":"flatten"/.test(fs.readFileSync(f, 'utf8'));
