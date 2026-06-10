@@ -1,6 +1,6 @@
 {
   "name": "@yksanjo/conductor",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "publishConfig": {
     "access": "public"
   },
@@ -37,6 +37,7 @@
     "docs/conductor-gate-meme.png",
     "docs/orchestrator-prompt.md",
     "docs/manual.html",
+    "docs/manual.pdf",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"

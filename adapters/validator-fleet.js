@@ -219,7 +219,9 @@ function status(rec) {
   if (si.lowBalance) return 'low-balance';
   if (si.versionDrift) return 'version-drift';
   if (si.voting) return 'healthy';
-  return 'behind';
+  // Not delinquent, reachable, but absent from the current vote set — a different condition
+  // than "catching up"; don't file it under BEHIND.
+  return 'not-voting';
 }
 
 const statuses = [
@@ -229,6 +231,7 @@ const statuses = [
   { key: 'degraded', title: 'DEGRADED', word: 'high skip', color: 'amber' },
   { key: 'low-balance', title: 'LOW BALANCE', word: 'low balance', color: 'amber' },
   { key: 'version-drift', title: 'VERSION DRIFT', word: 'version drift', color: 'dim' },
+  { key: 'not-voting', title: 'NOT IN VOTE SET', word: 'not voting', color: 'amber' },
   { key: 'healthy', title: 'VOTING', word: 'voting', color: 'green' },
 ];
 

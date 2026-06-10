@@ -16,13 +16,15 @@ const HELP = `🎼 conductor — situational awareness + control across your Cla
 
 read
   conductor                list your live windows (table)
-  conductor ls [opts]        opts: --adapter claude-code|fleet  --minutes N  --all  --json  --limit N
+  conductor ls [opts]        opts: --adapter NAME  --minutes N  --all  --json  --limit N
   conductor up [opts]        launch the web cockpit  (--adapter NAME, --port N, --no-open)
   conductor mcp              run the MCP server (stdio)
 
 adapters (--adapter NAME, default claude-code)
   claude-code              your live Claude Code windows (tmux control plane)
   fleet                    a trading-bot fleet at ~/.fleet/bots/*/events.jsonl
+  mev-searcher             a MEV searcher fleet (read-only liveness/pnl trails)
+  validator-fleet          Solana validators by vote liveness (read-only)
 
 control (tmux-managed windows)
   conductor run <label> [-- claude args]   launch a managed window in tmux
