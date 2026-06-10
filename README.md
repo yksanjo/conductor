@@ -1,15 +1,9 @@
 # 🎼 Conductor
 
-**Supervisory awareness across a fleet of semi-autonomous workers — starting with your live
-Claude Code sessions.**
+**Ten terminals running Claude Code, no idea which one is stuck or waiting on you. Conductor
+reads all of them — and lets you reply — from one window.**
 
 ![Conductor — run one command, see every Claude Code window grouped by status](docs/demo.gif)
-
-Conductor is a source-agnostic supervisory core with a pluggable **adapter** interface. The
-engine owns grouping, status ranking, sectioning, and the three surfaces (CLI table, web
-cockpit, MCP server); an adapter owns where the trails live and how to read them. Claude Code is
-one adapter; a [trading-bot fleet](#the-fleet-adapter) is another. Same engine, proven twice.
-**Read-only observation, opt-in control.**
 
 ![The Conductor cockpit — your live Claude Code windows grouped by status](docs/cockpit.png)
 
@@ -44,7 +38,24 @@ Code, the transcript under `~/.claude/projects/`). **Read-only observation, opt-
 watching is always-on and free; control (replies, launch, flatten) is opt-in and only where a
 real command channel exists. Zero dependencies. The server binds to `127.0.0.1` only, and
 state-changing requests require a local origin + an `X-Conductor` header (CSRF / DNS-rebinding
-guard); destructive control (flatten / broadcast) additionally requires a confirm token.
+guard); destructive control (flatten / broadcast) additionally requires a confirm token. The
+header stops hostile *webpages*, not local processes — anything already running code on your
+machine can call the API, same as it could call `tmux` directly. Run the cockpit for yourself,
+not as a service.
+
+Under the hood, Conductor is a source-agnostic supervisory core with a pluggable **adapter**
+interface: the engine owns grouping, status ranking, sectioning, and the three surfaces (CLI
+table, web cockpit, MCP server); an adapter owns where the trails live and how to read them.
+Claude Code is one adapter; a [trading-bot fleet](#the-fleet-adapter),
+[MEV searchers](#the-mev-searcher-adapter) and
+[Solana validators](#the-validator-fleet-adapter) are others — see
+[The abstraction](#the-abstraction).
+
+Conductor watches windows you already opened. Its sibling
+[**Conductor V2**](https://github.com/yksanjo/conductor2) flips the order: design the fleet
+first (topology + preset + mission), press FIRE, and steer the swarm from V2's bundled board.
+V2 is self-contained on its own tmux/registry namespace — fleets you *fire* live there; V1
+stays the watcher for windows you open by hand.
 
 ## How it works
 

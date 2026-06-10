@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.1
+
+- **Gate hardening: mixed approve+refuse replies no longer slip past the irreversibility gate.**
+  The refusal shortcut in `policy.gate()` used to fire on any refusal word anywhere in the reply,
+  so `"yes, go ahead and deploy — but do not merge anything else"` was relayed as if it were a
+  decline. The shortcut now fires only for an unambiguous decline: negated clauses are stripped
+  first, and a reply that still *orders* an irreversible action — or carries approval language
+  outside its negated clauses (including deferred approvals like "wait for the build, then
+  deploy") — is gated. Declines that name the action ("cancel the deploy") still relay.
+  6 new regression tests.
+- `conductor help` / `--help` now list all four adapters (mev-searcher and validator-fleet were
+  missing).
+- validator-fleet: a reachable, non-delinquent validator absent from the current vote set now
+  reports **NOT IN VOTE SET** instead of being misfiled under BEHIND / "catching up".
+- README: lead with the actual pitch (watch + reply to every window from one place), adapter
+  abstraction moved below the fold, link to [Conductor V2](https://github.com/yksanjo/conductor2),
+  and an honest note that the `X-Conductor` header is a browser-CSRF guard, not local-process auth.
+- Repo hygiene: internal `*.local.md` playbooks untracked from the public repo; `docs/manual.pdf`
+  added to the npm `files` allowlist (the README links it).
+
 ## 0.7.0
 
 - **Honest broadcast delivery — you can now see, per window, whether a prompt actually landed.**

@@ -93,7 +93,7 @@ async function main() {
   const args = parseArgs(process.argv);
   if (args.help) {
     console.log('conductor — situational awareness across your worker fleet\n');
-    console.log('Usage: conductor [--adapter claude-code|fleet] [--json] [--minutes N] [--all] [--limit N]');
+    console.log('Usage: conductor [--adapter claude-code|fleet|mev-searcher|validator-fleet] [--json] [--minutes N] [--all] [--limit N]');
     console.log('       conductor up        # open the web cockpit');
     console.log('       conductor help      # full command list');
     return;

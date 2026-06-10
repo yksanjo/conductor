@@ -61,4 +61,24 @@ ok('gate ALLOWS "stop" on a delete question', g7.allow === true);
 const g8 = gate('What should I do next?', 'deploy to prod now');
 ok('gate blocks a reply that ITSELF orders a deploy', g8.gated === true && g8.categories.includes('deploy'));
 
+// --- gate: mixed approve+refuse replies must NOT slip through on the refusal word ---
+const g9 = gate('Ready to deploy to production?', 'Yes, go ahead and deploy — but do not merge anything else');
+ok('gate blocks "yes, deploy — but do not merge"', g9.gated === true && g9.categories.includes('deploy'));
+
+const g10 = gate('Deploy to prod?', 'continue, but wait for the build first');
+ok('gate blocks "continue, but wait" on a deploy question', g10.gated === true);
+
+const g11 = gate('Send the invoice and the email?', 'approve the spend, just hold off on the email');
+ok('gate blocks "approve the spend, hold off the email"', g11.gated === true && g11.categories.includes('spend'));
+
+const g12 = gate('Deploy now?', 'wait for the build, then deploy');
+ok('gate blocks a DEFERRED approval ("wait …, then deploy")', g12.gated === true && g12.categories.includes('deploy'));
+
+// --- gate: unambiguous declines still relay even when they name the action ---
+const g13 = gate('Deploy to prod?', 'cancel the deploy');
+ok('gate ALLOWS "cancel the deploy" (decline naming the action)', g13.allow === true && g13.gated === false);
+
+const g14 = gate('Buy 2 SOL?', 'hold off');
+ok('gate ALLOWS a bare "hold off" on a spend question', g14.allow === true);
+
 console.log(`\n${pass} assertions passed.`);

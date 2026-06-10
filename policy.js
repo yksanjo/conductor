@@ -54,6 +54,18 @@ const AFFIRMATIVE = /^\s*(y|yes|yep|yeah|ya|sure|ok|okay|k|go|go ahead|do it|pro
 // a clear refusal is always safe to relay — that's how you say "no, don't deploy" through the loop.
 const REFUSAL = /\b(no|nope|don'?t|do\s+not|stop|halt|cancel|abort|hold\s+(on|off)|skip|decline|reject|wait)\b/i;
 
+// Approval language ANYWHERE in a reply — not just a pure-approval reply. "Yes, go ahead and
+// deploy — but do not merge anything else" both refuses and approves; the refusal half must not
+// smuggle the approval half past the gate.
+const APPROVAL_ANYWHERE = /\b(yes|yep|yeah|sure|ok(ay)?|go\s+ahead|do\s+it|proceed|approve[ds]?|confirm(ed)?|ship\s+it|send\s+it|lgtm|sounds\s+good|green\s*-?light|continue)\b/i;
+
+// Negators that genuinely CANCEL the clause that follows ("don't deploy", "hold off on the
+// email", "without pushing"). Deliberately excludes "wait"/"hold on", which merely DEFER —
+// "wait for the build, then deploy" is still an order to deploy.
+const NEGATED_CLAUSE = /\b(don'?t|do\s+not|never|stop|halt|cancel|abort|skip|decline|reject|without|hold\s+off(\s+on)?|rather\s+than)\b[^,.;:!?]*/gi;
+
+function stripNegated(text) { return String(text || '').replace(NEGATED_CLAUSE, ' '); }
+
 // classify(text) → { categories:[...], matched:[...], irreversible:bool }
 // Which irreversible classes does this text touch, and the literal substrings that tripped it.
 function classify(text) {
@@ -76,19 +88,24 @@ function classify(text) {
 // Should an autonomous driver be allowed to send `reply` to a window blocked on `question`?
 function gate(question, reply) {
   const r = String(reply || '');
-  // An explicit refusal/halt is always safe — you're declining, which is reversible.
-  if (REFUSAL.test(r) && !AFFIRMATIVE.test(r)) {
+  const q = classify(question);
+  // Classify only what the reply actually ORDERS: drop negated clauses first, so a refusal's
+  // own mention of the action ("no, don't deploy") doesn't trip the gate on itself.
+  const stripped = stripNegated(r);
+  const ordered = classify(stripped);
+  // The refusal shortcut fires ONLY for an unambiguous decline: refusal language present, no
+  // surviving irreversible order, and no approval language outside the negated clauses. A mixed
+  // "yes, deploy — but don't merge" is an approval wearing a refusal word; it falls through.
+  if (REFUSAL.test(r) && !AFFIRMATIVE.test(r) && !ordered.irreversible && !APPROVAL_ANYWHERE.test(stripped)) {
     return { allow: true, gated: false, reason: 'reply declines or halts — safe to relay' };
   }
-  const q = classify(question);
-  const rep = classify(reply);
   const categories = [];
-  for (const c of [...q.categories, ...rep.categories]) if (!categories.includes(c)) categories.push(c);
+  for (const c of [...q.categories, ...ordered.categories]) if (!categories.includes(c)) categories.push(c);
   if (categories.length === 0) {
     return { allow: true, gated: false, reason: 'no irreversible action detected — safe to continue' };
   }
   const matched = [];
-  for (const m of [...q.matched, ...rep.matched]) if (!matched.includes(m)) matched.push(m);
+  for (const m of [...q.matched, ...ordered.matched]) if (!matched.includes(m)) matched.push(m);
   return {
     allow: false,
     gated: true,
